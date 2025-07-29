@@ -7,10 +7,16 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
 import time
 import json
 import csv
+import logging
+import datetime
+import openai
 from config import BROWSER_CONFIG
 
 
@@ -19,75 +25,133 @@ class WorkUaParser:
         """Инициализация парсера"""
         self.driver = None
         self.base_url = "https://www.work.ua/resumes-%D0%B1%D1%83%D1%85%D0%B3%D0%B0%D0%BB%D1%82%D0%B5%D1%80/"
+        self.setup_logging()
+        self.max_retries = 3
+        self.retry_delay = 2
+        
+    def setup_logging(self):
+        """Настройка системы логирования"""
+        log_filename = f"work_ua_parser_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_filename, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("Work.ua Parser инициализирован")
+        
+    def retry_operation(self, operation, operation_name, max_retries=None):
+        """Универсальная функция для повторения операций при ошибках"""
+        if max_retries is None:
+            max_retries = self.max_retries
+            
+        for attempt in range(max_retries + 1):
+            try:
+                result = operation()
+                if attempt > 0:
+                    self.logger.info(f"✅ {operation_name} успешно выполнена с попытки {attempt + 1}")
+                return result
+            except Exception as e:
+                if attempt < max_retries:
+                    self.logger.warning(f"⚠️ {operation_name} неудачна (попытка {attempt + 1}/{max_retries + 1}): {e}")
+                    time.sleep(self.retry_delay)
+                else:
+                    self.logger.error(f"❌ {operation_name} провалена после {max_retries + 1} попыток: {e}")
+                    raise e
         
     def setup_driver(self):
         """Настройка и запуск Chrome драйвера"""
-        print("Настройка Chrome драйвера...")
-        
-        # Настройки Chrome
-        chrome_options = Options()
-        
-        # Устанавливаем размер окна
-        chrome_options.add_argument(f"--window-size={BROWSER_CONFIG['window_size'][0]},{BROWSER_CONFIG['window_size'][1]}")
-        
-        # Если нужен headless режим
-        if BROWSER_CONFIG['headless']:
-            chrome_options.add_argument("--headless")
+        def _setup():
+            self.logger.info("Настройка Chrome драйвера...")
             
-        # Дополнительные настройки для стабильности
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
+            # Настройки Chrome
+            chrome_options = Options()
+            
+            # Устанавливаем размер окна
+            chrome_options.add_argument(f"--window-size={BROWSER_CONFIG['window_size'][0]},{BROWSER_CONFIG['window_size'][1]}")
+            
+            # Если нужен headless режим
+            if BROWSER_CONFIG['headless']:
+                chrome_options.add_argument("--headless")
+                
+            # Дополнительные настройки для стабильности
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-web-security")
+            
+            try:
+                # Создаем сервис для Chrome драйвера
+                service = Service(ChromeDriverManager().install())
+                
+                # Инициализируем драйвер
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+                # Устанавливаем таймауты
+                self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
+                self.driver.implicitly_wait(BROWSER_CONFIG['implicit_wait'])
+                
+                self.logger.info("✅ Chrome драйвер успешно инициализирован")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при инициализации драйвера: {e}")
+                raise e
         
         try:
-            # Создаем сервис для Chrome драйвера
-            service = Service(ChromeDriverManager().install())
-            
-            # Инициализируем драйвер
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            # Устанавливаем таймауты
-            self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
-            self.driver.implicitly_wait(BROWSER_CONFIG['implicit_wait'])
-            
-            print("✅ Chrome драйвер успешно инициализирован")
-            return True
-            
+            return self.retry_operation(_setup, "Инициализация драйвера")
         except Exception as e:
-            print(f"❌ Ошибка при инициализации драйвера: {e}")
+            self.logger.critical(f"❌ Критическая ошибка инициализации драйвера: {e}")
             return False
         
     def open_page(self):
         """Открытие страницы с резюме"""
         if not self.driver:
-            print("❌ Драйвер не инициализирован")
+            self.logger.error("❌ Драйвер не инициализирован")
             return False
             
-        try:
-            print(f"Открываем страницу: {self.base_url}")
-            self.driver.get(self.base_url)
+        def _open():
+            self.logger.info(f"Открываем страницу: {self.base_url}")
             
-            # Ждем загрузки страницы
-            time.sleep(3)
-            
-            # Проверяем, что страница загружена
-            current_url = self.driver.current_url
-            page_title = self.driver.title
-            
-            print(f"✅ Страница загружена:")
-            print(f"   URL: {current_url}")
-            print(f"   Заголовок: {page_title}")
-            
-            # Проверяем, что мы на правильной странице
-            if "work.ua" in current_url and ("резюме" in page_title.lower() or "resume" in current_url):
-                print("✅ Мы на правильной странице work.ua")
-                return True
-            else:
-                print("⚠️ Возможно, мы не на той странице")
-                return False
+            try:
+                self.driver.get(self.base_url)
                 
+                # Ждем загрузки страницы с WebDriverWait
+                wait = WebDriverWait(self.driver, 10)
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                
+                # Проверяем, что страница загружена
+                current_url = self.driver.current_url
+                page_title = self.driver.title
+                
+                self.logger.info(f"✅ Страница загружена:")
+                self.logger.info(f"   URL: {current_url}")
+                self.logger.info(f"   Заголовок: {page_title}")
+                
+                # Проверяем, что мы на правильной странице
+                if "work.ua" in current_url and ("резюме" in page_title.lower() or "resume" in current_url):
+                    self.logger.info("✅ Мы на правильной странице work.ua")
+                    return True
+                else:
+                    self.logger.warning("⚠️ Возможно, мы не на той странице")
+                    return False
+                    
+            except TimeoutException:
+                self.logger.error("❌ Таймаут при загрузке страницы")
+                raise
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при открытии страницы: {e}")
+                raise
+        
+        try:
+            return self.retry_operation(_open, "Открытие страницы")
         except Exception as e:
-            print(f"❌ Ошибка при открытии страницы: {e}")
+            self.logger.critical(f"❌ Критическая ошибка открытия страницы: {e}")
             return False
         
     def find_resume_cards(self):
@@ -242,76 +306,134 @@ class WorkUaParser:
     def click_card(self, card):
         """Переход внутрь карточки"""
         if not card or not self.driver:
-            print("❌ Карточка или драйвер не доступны")
+            self.logger.error("❌ Карточка или драйвер не доступны")
             return False
             
-        try:
-            # Находим ссылку внутри карточки
-            link_element = card.find_element(By.CSS_SELECTOR, "h2 a")
-            link_url = link_element.get_attribute("href")
-            title = link_element.text.strip()
-            
-            print(f"🔗 Переходим в резюме: '{title}'")
-            print(f"   URL: {link_url}")
-            
-            # Кликаем по ссылке
-            link_element.click()
-            
-            # Ждем загрузки новой страницы
-            time.sleep(3)
-            
-            # Проверяем, что мы перешли на страницу резюме
-            current_url = self.driver.current_url
-            if "/resumes/" in current_url and current_url != self.base_url:
-                print("✅ Успешно перешли на страницу резюме")
-                print(f"   Текущий URL: {current_url}")
-                return True
-            else:
-                print("⚠️ Возможно, переход не удался")
-                print(f"   Текущий URL: {current_url}")
-                return False
+        def _click():
+            try:
+                # Проверяем состояние драйвера
+                self.driver.current_url  # Проверка связи с браузером
                 
-        except Exception as e:
-            print(f"❌ Ошибка при клике по карточке: {e}")
-            return False
+                # Находим ссылку внутри карточки
+                link_element = card.find_element(By.CSS_SELECTOR, "h2 a")
+                link_url = link_element.get_attribute("href")
+                title = link_element.text.strip()
+                
+                self.logger.info(f"🔗 Переходим в резюме: '{title}'")
+                self.logger.info(f"   URL: {link_url}")
+                
+                # Кликаем по ссылке
+                link_element.click()
+                
+                # Ждем загрузки новой страницы с timeout
+                wait = WebDriverWait(self.driver, 15)
+                wait.until(lambda driver: "/resumes/" in driver.current_url)
+                
+                # Проверяем, что мы перешли на страницу резюме
+                current_url = self.driver.current_url
+                if "/resumes/" in current_url and current_url != self.base_url:
+                    self.logger.info("✅ Успешно перешли на страницу резюме")
+                    self.logger.info(f"   Текущий URL: {current_url}")
+                    return True
+                else:
+                    self.logger.warning("⚠️ Возможно, переход не удался")
+                    self.logger.warning(f"   Текущий URL: {current_url}")
+                    return False
+                    
+            except TimeoutException:
+                self.logger.error("❌ Таймаут при переходе в карточку")
+                raise
+            except StaleElementReferenceException:
+                self.logger.error("❌ Stale element при клике по карточке")
+                raise
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при клике по карточке: {e}")
+                raise
         
+        try:
+            return self.retry_operation(_click, "Переход в карточку", max_retries=2)
+        except Exception as e:
+            self.logger.error(f"❌ Не удалось перейти в карточку после попыток: {e}")
+            return False
+
     def go_back(self):
         """Возврат на предыдущую страницу"""
         if not self.driver:
-            print("❌ Драйвер не доступен")
+            self.logger.error("❌ Драйвер не доступен")
             return False
             
-        try:
-            print("⬅️ Возвращаемся назад...")
-            current_url_before = self.driver.current_url
-            
-            # Возвращаемся назад
-            self.driver.back()
-            
-            # Ждем загрузки
-            time.sleep(2)
-            
-            # Проверяем, что мы вернулись
-            current_url_after = self.driver.current_url
-            
-            if current_url_after != current_url_before:
-                print("✅ Успешно вернулись назад")
-                print(f"   Текущий URL: {current_url_after}")
-                return True
-            else:
-                print("⚠️ Возможно, возврат не удался")
-                return False
+        def _go_back():
+            try:
+                self.logger.info("⬅️ Возвращаемся назад...")
                 
-        except Exception as e:
-            print(f"❌ Ошибка при возврате назад: {e}")
-            return False
+                # Проверяем состояние драйвера перед операцией
+                current_url_before = self.driver.current_url
+                self.logger.info(f"URL до возврата: {current_url_before}")
+                
+                # Возвращаемся назад с коротким timeout
+                self.driver.set_page_load_timeout(10)  # Уменьшаем timeout для возврата
+                self.driver.back()
+                
+                # Ждем загрузки с WebDriverWait
+                wait = WebDriverWait(self.driver, 10)
+                wait.until(lambda driver: driver.current_url != current_url_before)
+                
+                # Дополнительное ожидание стабилизации страницы
+                time.sleep(2)
+                
+                # Проверяем, что мы вернулись
+                current_url_after = self.driver.current_url
+                self.logger.info(f"URL после возврата: {current_url_after}")
+                
+                if current_url_after != current_url_before:
+                    self.logger.info("✅ Успешно вернулись назад")
+                    
+                    # Восстанавливаем обычный timeout
+                    self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
+                    return True
+                else:
+                    self.logger.warning("⚠️ URL не изменился, возможно возврат не удался")
+                    return False
+                    
+            except TimeoutException:
+                self.logger.error("❌ Таймаут при возврате назад")
+                # Восстанавливаем timeout даже при ошибке
+                try:
+                    self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
+                except:
+                    pass
+                raise
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка при возврате назад: {e}")
+                # Восстанавливаем timeout даже при ошибке  
+                try:
+                    self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
+                except:
+                    pass
+                raise
         
-    def close_driver(self):
-        """Закрытие браузера"""
-        if self.driver:
-            print("Закрытие браузера...")
-            self.driver.quit()
-            print("✅ Браузер закрыт")
+        try:
+            return self.retry_operation(_go_back, "Возврат назад", max_retries=2)
+        except Exception as e:
+            self.logger.error(f"❌ Критическая ошибка возврата: {e}")
+            # Проверяем, жив ли еще драйвер
+            try:
+                self.driver.current_url
+                self.logger.info("Драйвер еще работает")
+            except:
+                self.logger.critical("❌ Драйвер больше не отвечает, требуется перезапуск")
+            return False
+            
+    def check_driver_alive(self):
+        """Проверка состояния драйвера"""
+        try:
+            if self.driver:
+                self.driver.current_url
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Драйвер не отвечает: {e}")
+            return False
 
     def parse_resume_details(self):
         """Извлечение детальной информации со страницы резюме"""
@@ -540,6 +662,115 @@ class WorkUaParser:
             print(f"❌ Ошибка при извлечении детальной информации: {e}")
             return None
 
+    def parse_resume_with_llm(self):
+        """Извлечение информации со страницы резюме с помощью LLM"""
+        if not self.driver:
+            self.logger.error("❌ Драйвер не доступен")
+            return None
+            
+        try:
+            # Проверяем, что мы на странице резюме
+            current_url = self.driver.current_url
+            if "/resumes/" not in current_url:
+                self.logger.warning("⚠️ Мы не на странице резюме")
+                return None
+            
+            self.logger.info("🤖 Извлекаем HTML страницы для LLM обработки...")
+            
+            # Получаем весь HTML страницы
+            page_html = self.driver.page_source
+            
+            # Очищаем HTML от лишнего (скрипты, стили)
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(page_html, 'html.parser')
+            
+            # Удаляем ненужные элементы
+            for element in soup(['script', 'style', 'nav', 'header', 'footer']):
+                element.decompose()
+            
+            # Берем только текстовое содержимое основной области
+            main_content = soup.get_text(separator=' ', strip=True)
+            
+            # Ограничиваем размер текста (ChatGPT имеет лимиты)
+            if len(main_content) > 8000:
+                main_content = main_content[:8000] + "..."
+            
+            self.logger.info(f"📄 Подготовлен текст длиной {len(main_content)} символов")
+            
+            # Формируем prompt для ChatGPT
+            prompt = f"""
+Проанализируй страницу резюме с сайта work.ua и извлеки информацию в формате JSON.
+
+Текст страницы:
+{main_content}
+
+Верни JSON с такими полями:
+{{
+    "full_name": "полное имя кандидата",
+    "position": "желаемая должность", 
+    "salary": "зарплатные ожидания",
+    "age": "возраст",
+    "location": "город/локация",
+    "education": ["образование", "учебные заведения"],
+    "experience": ["опыт работы", "предыдущие места работы"],
+    "skills": ["навыки", "ключевые компетенции"],
+    "additional_info": "дополнительная информация"
+}}
+
+Если какая-то информация не найдена, укажи "Не указано".
+Ответь ТОЛЬКО JSON, без дополнительного текста.
+"""
+
+            # Отправляем запрос в OpenAI
+            self.logger.info("🚀 Отправляем запрос в OpenAI...")
+            
+            try:
+                client = openai.OpenAI()
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Ты эксперт по анализу резюме. Извлекаешь структурированную информацию из текста резюме."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1000,
+                    temperature=0.1
+                )
+                
+                # Парсим ответ
+                llm_response = response.choices[0].message.content.strip()
+                self.logger.info("✅ Получен ответ от OpenAI")
+                
+                # Очищаем ответ от markdown разметки
+                if llm_response.startswith('```json'):
+                    llm_response = llm_response[7:]  # Убираем ```json
+                if llm_response.startswith('```'):
+                    llm_response = llm_response[3:]   # Убираем ```
+                if llm_response.endswith('```'):
+                    llm_response = llm_response[:-3]  # Убираем ```
+                llm_response = llm_response.strip()
+                
+                # Парсим JSON
+                try:
+                    resume_data = json.loads(llm_response)
+                    resume_data['resume_url'] = current_url
+                    resume_data['parsed_with'] = 'OpenAI GPT-3.5'
+                    
+                    self.logger.info("🎉 Информация успешно извлечена с помощью LLM")
+                    return resume_data
+                    
+                except json.JSONDecodeError:
+                    self.logger.error("❌ Ошибка парсинга JSON от OpenAI")
+                    self.logger.error(f"Ответ: {llm_response}")
+                    return None
+                    
+            except Exception as e:
+                self.logger.error(f"❌ Ошибка запроса к OpenAI: {e}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"❌ Ошибка в parse_resume_with_llm: {e}")
+            return None
+
     def process_all_cards(self):
         """Обработка всех карточек резюме на текущей странице"""
         if not self.driver:
@@ -593,8 +824,8 @@ class WorkUaParser:
                     if self.click_card(current_card):
                         print(f"✅ Перешли в резюме {i+1}")
                         
-                        # Извлекаем детальную информацию
-                        details = self.parse_resume_details()
+                        # Извлекаем детальную информацию с помощью LLM
+                        details = self.parse_resume_with_llm()
                         
                         if details:
                             # Объединяем краткую и детальную информацию
@@ -666,6 +897,30 @@ class WorkUaParser:
             print(f"❌ Критическая ошибка в массовой обработке: {e}")
             return []
 
+    def close_driver(self):
+        """Закрытие браузера"""
+        try:
+            if self.driver:
+                self.logger.info("Закрытие браузера...")
+                
+                # Проверяем, отвечает ли драйвер
+                try:
+                    self.driver.current_url
+                    self.driver.quit()
+                    self.logger.info("✅ Браузер корректно закрыт")
+                except Exception as e:
+                    self.logger.warning(f"Браузер не отвечал, принудительное закрытие: {e}")
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                
+                self.driver = None
+        except Exception as e:
+            self.logger.error(f"Ошибка при закрытии браузера: {e}")
+        finally:
+            self.driver = None
+
 
 if __name__ == "__main__":
     parser = WorkUaParser()
@@ -722,8 +977,8 @@ if __name__ == "__main__":
                         if parser.click_card(current_card):
                             print(f"✅ Перешли в резюме {i+1}")
                             
-                            # Извлекаем детальную информацию
-                            details = parser.parse_resume_details()
+                            # Извлекаем детальную информацию с помощью LLM
+                            details = parser.parse_resume_with_llm()
                             
                             if details:
                                 full_data = {
