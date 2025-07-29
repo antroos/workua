@@ -313,53 +313,463 @@ class WorkUaParser:
             self.driver.quit()
             print("✅ Браузер закрыт")
 
+    def parse_resume_details(self):
+        """Извлечение детальной информации со страницы резюме"""
+        if not self.driver:
+            print("❌ Драйвер не доступен")
+            return None
+            
+        try:
+            # Проверяем, что мы на странице резюме
+            current_url = self.driver.current_url
+            if "/resumes/" not in current_url:
+                print("⚠️ Мы не на странице резюме")
+                return None
+            
+            print("📋 Извлекаем детальную информацию с страницы резюме...")
+            
+            resume_details = {}
+            
+            # Основная информация - заголовок резюме (должность)
+            try:
+                # Пробуем разные селекторы для заголовка резюме
+                title_selectors = ["h1.card-title", "h1", ".resume-header h1", ".card-header h1"]
+                title_found = False
+                
+                for selector in title_selectors:
+                    try:
+                        title_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        title_text = title_element.text.strip()
+                        if title_text and len(title_text) > 3:
+                            resume_details['full_title'] = title_text
+                            title_found = True
+                            break
+                    except:
+                        continue
+                
+                if not title_found:
+                    resume_details['full_title'] = "Не указано"
+            except:
+                resume_details['full_title'] = "Не указано"
+            
+            # Полное имя - ищем в разных местах
+            try:
+                name_found = False
+                
+                # Ищем имя в специальных блоках
+                name_selectors = [".card-body .strong-600", ".personal-info .name", "h2.name", ".candidate-name"]
+                
+                for selector in name_selectors:
+                    try:
+                        name_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for name_elem in name_elements:
+                            name_text = name_elem.text.strip()
+                            # Проверяем, что это действительно имя (не содержит "грн", цифры в больших количествах)
+                            if name_text and "грн" not in name_text and len(name_text.split()) <= 3:
+                                resume_details['full_name'] = name_text
+                                name_found = True
+                                break
+                        if name_found:
+                            break
+                    except:
+                        continue
+                
+                if not name_found:
+                    resume_details['full_name'] = "Не указано"
+            except:
+                resume_details['full_name'] = "Не указано"
+            
+            # Зарплатные ожидания - улучшенный поиск
+            try:
+                salary_selectors = [".salary-value", ".salary", ".expected-salary", "span:contains('грн')", ".strong-600"]
+                salary_found = False
+                
+                for selector in salary_selectors:
+                    try:
+                        salary_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for sal_elem in salary_elements:
+                            sal_text = sal_elem.text.strip()
+                            if "грн" in sal_text:
+                                resume_details['expected_salary'] = sal_text
+                                salary_found = True
+                                break
+                        if salary_found:
+                            break
+                    except:
+                        continue
+                
+                if not salary_found:
+                    resume_details['expected_salary'] = "Не указана"
+            except:
+                resume_details['expected_salary'] = "Не указана"
+            
+            # Детальный опыт работы - улучшенный парсинг
+            try:
+                experience_list = []
+                
+                # Ищем блоки с опытом работы
+                experience_selectors = [
+                    ".work-experience li",
+                    ".experience .card-body ul li", 
+                    ".experience-item",
+                    "ul.list-unstyled li",
+                    ".timeline-item"
+                ]
+                
+                for selector in experience_selectors:
+                    try:
+                        exp_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for exp in exp_elements[:5]:  # Берем первые 5
+                            exp_text = exp.text.strip()
+                            # Фильтруем: должно быть достаточно длинное и содержать информацию о работе
+                            if (exp_text and len(exp_text) > 20 and 
+                                any(word in exp_text.lower() for word in ["бухгалтер", "робота", "досвід", "компанія", "рік", "місяць"])):
+                                experience_list.append(exp_text)
+                        
+                        if experience_list:  # Если нашли опыт, прекращаем поиск
+                            break
+                    except:
+                        continue
+                
+                # Если не нашли в специальных блоках, ищем в основном тексте
+                if not experience_list:
+                    try:
+                        all_paragraphs = self.driver.find_elements(By.CSS_SELECTOR, "p, div")
+                        for p in all_paragraphs:
+                            p_text = p.text.strip()
+                            if (len(p_text) > 30 and len(p_text) < 200 and
+                                any(word in p_text.lower() for word in ["досвід", "працював", "робота", "компанія"])):
+                                experience_list.append(p_text)
+                                if len(experience_list) >= 3:
+                                    break
+                    except:
+                        pass
+                
+                resume_details['detailed_experience'] = experience_list
+            except:
+                resume_details['detailed_experience'] = []
+            
+            # Образование - улучшенный поиск
+            try:
+                education_info = []
+                
+                # Ищем информацию об образовании
+                all_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+                education_keywords = ["освіта", "університет", "інститут", "коледж", "технікум", "диплом"]
+                
+                # Ищем параграфы с образованием
+                all_paragraphs = self.driver.find_elements(By.CSS_SELECTOR, "p, div, li")
+                for p in all_paragraphs:
+                    p_text = p.text.strip()
+                    if (p_text and len(p_text) > 10 and len(p_text) < 150 and
+                        any(keyword in p_text.lower() for keyword in education_keywords)):
+                        education_info.append(p_text)
+                        if len(education_info) >= 2:
+                            break
+                
+                if not education_info:
+                    # Общий поиск упоминаний образования
+                    found_keywords = [kw for kw in education_keywords if kw in all_text]
+                    if found_keywords:
+                        education_info = [f"Найдено упоминание: {', '.join(found_keywords)}"]
+                    else:
+                        education_info = ["Не указано"]
+                
+                resume_details['education'] = education_info
+            except:
+                resume_details['education'] = ["Не указано"]
+            
+            # Навыки - расширенный поиск
+            try:
+                skills_list = []
+                
+                # Ищем ключевые навыки бухгалтера в тексте
+                full_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+                accounting_keywords = [
+                    "1c", "excel", "бухгалтерія", "звітність", "податки", "баланс", 
+                    "документооборот", "зарплата", "облік", "аудит", "касса", "банк",
+                    "пдв", "фінанси", "економіка", "планування"
+                ]
+                
+                found_skills = []
+                for keyword in accounting_keywords:
+                    if keyword in full_text:
+                        found_skills.append(keyword)
+                
+                if found_skills:
+                    skills_list = [f"Найденные навыки: {', '.join(found_skills[:8])}"]  # Первые 8
+                else:
+                    skills_list = ["Навыки не найдены в тексте"]
+                
+                resume_details['skills'] = skills_list
+            except:
+                resume_details['skills'] = ["Не указаны"]
+            
+            # Контактная информация - ищем аккуратно
+            try:
+                resume_details['contact_info'] = ["Скрыто для конфиденциальности"]
+            except:
+                resume_details['contact_info'] = ["Скрыто"]
+            
+            # Дополнительная информация - ищем возраст, город, статус
+            try:
+                additional_info = []
+                
+                # Ищем информацию в разных элементах
+                info_elements = self.driver.find_elements(By.CSS_SELECTOR, "p, span, div")
+                for info in info_elements:
+                    info_text = info.text.strip()
+                    # Ищем полезную дополнительную информацию
+                    if (info_text and len(info_text) < 50 and
+                        any(word in info_text.lower() for word in ["рік", "років", "місто", "київ", "харків", "одеса", "дніпро"])):
+                        additional_info.append(info_text)
+                        if len(additional_info) >= 3:
+                            break
+                
+                resume_details['additional_info'] = additional_info if additional_info else ["Базовая информация"]
+            except:
+                resume_details['additional_info'] = ["Нет дополнительной информации"]
+            
+            # URL резюме
+            resume_details['resume_url'] = current_url
+            
+            print("✅ Детальная информация извлечена")
+            return resume_details
+            
+        except Exception as e:
+            print(f"❌ Ошибка при извлечении детальной информации: {e}")
+            return None
+
+    def process_all_cards(self):
+        """Обработка всех карточек резюме на текущей странице"""
+        if not self.driver:
+            print("❌ Драйвер не доступен")
+            return []
+            
+        try:
+            print("🔄 Начинаем массовую обработку карточек...")
+            
+            # Находим все карточки
+            cards = self.find_resume_cards()
+            if not cards:
+                print("❌ Карточки не найдены")
+                return []
+            
+            total_cards = len(cards)
+            print(f"📊 Найдено {total_cards} карточек для обработки")
+            
+            processed_resumes = []
+            successful_count = 0
+            failed_count = 0
+            
+            # Обрабатываем каждую карточку по индексу (избегаем stale reference)
+            for i in range(total_cards):
+                try:
+                    print(f"\n{'='*60}")
+                    print(f"🎯 ОБРАБАТЫВАЕМ КАРТОЧКУ {i+1}/{total_cards}")
+                    print(f"{'='*60}")
+                    
+                    # ЗАНОВО находим карточки для избежания stale reference
+                    current_cards = self.find_resume_cards()
+                    if not current_cards or i >= len(current_cards):
+                        print(f"⚠️ Карточка {i+1} больше не доступна")
+                        failed_count += 1
+                        continue
+                    
+                    current_card = current_cards[i]
+                    
+                    # Извлекаем краткую информацию с карточки
+                    card_info = self.parse_card_info(current_card)
+                    if not card_info:
+                        print(f"⚠️ Не удалось извлечь информацию из карточки {i+1}")
+                        failed_count += 1
+                        continue
+                    
+                    print(f"📋 Карточка: {card_info['title']}")
+                    print(f"👤 Имя: {card_info['name']}")
+                    print(f"💰 Зарплата: {card_info['salary']}")
+                    
+                    # Переходим в резюме
+                    if self.click_card(current_card):
+                        print(f"✅ Перешли в резюме {i+1}")
+                        
+                        # Извлекаем детальную информацию
+                        details = self.parse_resume_details()
+                        
+                        if details:
+                            # Объединяем краткую и детальную информацию
+                            full_resume_data = {
+                                'card_number': i+1,
+                                'card_info': card_info,
+                                'detailed_info': details,
+                                'processing_status': 'success'
+                            }
+                            
+                            processed_resumes.append(full_resume_data)
+                            successful_count += 1
+                            
+                            print(f"✅ Резюме {i+1} успешно обработано")
+                            print(f"   Полное имя: {details['full_name']}")
+                            print(f"   Навыки: {', '.join(details['skills'][:1])}")
+                            print(f"   Опыт: {len(details['detailed_experience'])} записей")
+                        else:
+                            print(f"⚠️ Не удалось извлечь детали резюме {i+1}")
+                            # Сохраняем хотя бы краткую информацию
+                            partial_data = {
+                                'card_number': i+1,
+                                'card_info': card_info,
+                                'detailed_info': None,
+                                'processing_status': 'partial'
+                            }
+                            processed_resumes.append(partial_data)
+                            failed_count += 1
+                        
+                        # Возвращаемся назад
+                        if self.go_back():
+                            print(f"↩️ Вернулись на список после карточки {i+1}")
+                            time.sleep(1.5)  # Увеличенная пауза для стабилизации
+                        else:
+                            print(f"❌ Не удалось вернуться после карточки {i+1}")
+                            break  # Прекращаем обработку, если не можем вернуться
+                            
+                    else:
+                        print(f"❌ Не удалось перейти в карточку {i+1}")
+                        failed_count += 1
+                        continue
+                    
+                    # Прогресс
+                    progress = ((i+1) / total_cards) * 100
+                    print(f"📈 Прогресс: {progress:.1f}% ({i+1}/{total_cards})")
+                    
+                    # Небольшая пауза между обработкой карточек
+                    if i < total_cards - 1:
+                        time.sleep(0.5)
+                        
+                except Exception as e:
+                    print(f"❌ Ошибка при обработке карточки {i+1}: {e}")
+                    failed_count += 1
+                    continue
+            
+            # Итоговая статистика
+            print(f"\n{'='*60}")
+            print(f"📊 ИТОГИ МАССОВОЙ ОБРАБОТКИ")
+            print(f"{'='*60}")
+            print(f"✅ Успешно обработано: {successful_count}")
+            print(f"❌ Ошибок: {failed_count}")
+            print(f"📋 Всего карточек: {total_cards}")
+            print(f"📈 Успешность: {(successful_count/total_cards)*100:.1f}%")
+            print(f"{'='*60}")
+            
+            return processed_resumes
+            
+        except Exception as e:
+            print(f"❌ Критическая ошибка в массовой обработке: {e}")
+            return []
+
 
 if __name__ == "__main__":
     parser = WorkUaParser()
     print("Work.ua Parser инициализирован")
     
-    # Тестируем полный цикл: драйвер + страница + поиск + парсинг + переход
+    # Тестируем массовую обработку карточек (демо версия - первые 3)
     if parser.setup_driver():
         print("Драйвер готов к работе")
         
         if parser.open_page():
             print("✅ Страница успешно открыта")
             
-            # Ищем карточки резюме
+            # Находим все карточки
             cards = parser.find_resume_cards()
             if cards:
                 print(f"🎯 Найдено {len(cards)} карточек")
                 
-                # Тестируем переход в первую карточку
-                print(f"\n🧪 ТЕСТИРУЕМ ПЕРЕХОД В КАРТОЧКУ:")
-                first_card = cards[0]
+                print(f"\n🧪 ТЕСТИРУЕМ МАССОВУЮ ОБРАБОТКУ (первые 3 карточки):")
+                print("📝 Для демо ограничиваем до 3 карточек, чтобы не перегружать тест")
                 
-                # Парсим информацию о карточке
-                card_info = parser.parse_card_info(first_card)
-                if card_info:
-                    print(f"Тестируем карточку: {card_info['title']}")
+                # Используем исправленную логику из process_all_cards
+                processed_resumes = []
+                successful_count = 0
+                failed_count = 0
+                total_cards = min(3, len(cards))  # Ограничиваем до 3
                 
-                # Переходим внутрь карточки
-                if parser.click_card(first_card):
-                    print("🎉 Переход успешен! Сейчас мы внутри резюме")
-                    time.sleep(3)  # Даем время посмотреть страницу резюме
-                    
-                    # Возвращаемся назад
-                    if parser.go_back():
-                        print("🎉 Возврат успешен! Мы снова на списке резюме")
-                        time.sleep(2)  # Даем время посмотреть
+                # Обрабатываем по индексу, а не по элементу
+                for i in range(total_cards):
+                    try:
+                        print(f"\n{'='*50}")
+                        print(f"🎯 ОБРАБАТЫВАЕМ КАРТОЧКУ {i+1}/{total_cards}")
+                        print(f"{'='*50}")
                         
-                        # Проверяем, что карточки снова доступны
-                        cards_after_return = parser.find_resume_cards()
-                        if cards_after_return:
-                            print(f"✅ После возврата найдено {len(cards_after_return)} карточек")
+                        # ЗАНОВО находим карточки для избежания stale reference
+                        current_cards = parser.find_resume_cards()
+                        if not current_cards or i >= len(current_cards):
+                            print(f"⚠️ Карточка {i+1} больше не доступна")
+                            failed_count += 1
+                            continue
+                        
+                        current_card = current_cards[i]
+                        
+                        # Извлекаем краткую информацию
+                        card_info = parser.parse_card_info(current_card)
+                        if not card_info:
+                            print(f"⚠️ Не удалось извлечь информацию из карточки {i+1}")
+                            failed_count += 1
+                            continue
+                        
+                        print(f"📋 Карточка: {card_info['title']}")
+                        print(f"👤 Имя: {card_info['name']}")
+                        
+                        # Переходим в резюме
+                        if parser.click_card(current_card):
+                            print(f"✅ Перешли в резюме {i+1}")
+                            
+                            # Извлекаем детальную информацию
+                            details = parser.parse_resume_details()
+                            
+                            if details:
+                                full_data = {
+                                    'card_number': i+1,
+                                    'card_info': card_info,
+                                    'detailed_info': details
+                                }
+                                processed_resumes.append(full_data)
+                                successful_count += 1
+                                
+                                print(f"✅ Резюме {i+1} обработано!")
+                                print(f"   Детали: {details['full_name']}")
+                                print(f"   Навыки: {details['skills'][0] if details['skills'] else 'Нет'}")
+                            else:
+                                failed_count += 1
+                            
+                            # Возвращаемся назад
+                            if parser.go_back():
+                                print(f"↩️ Вернулись на список")
+                                time.sleep(1.5)  # Увеличенная пауза
+                            else:
+                                print(f"❌ Проблема с возвратом")
+                                break
+                                
                         else:
-                            print("⚠️ После возврата карточки не найдены")
-                    else:
-                        print("❌ Не удалось вернуться назад")
-                else:
-                    print("❌ Не удалось перейти в карточку")
-                    
+                            print(f"❌ Не удалось перейти в карточку {i+1}")
+                            failed_count += 1
+                            
+                        progress = ((i+1) / total_cards) * 100
+                        print(f"📈 Прогресс: {progress:.1f}%")
+                        
+                    except Exception as e:
+                        print(f"❌ Ошибка: {e}")
+                        failed_count += 1
+                
+                # Итоги демо-теста
+                print(f"\n{'='*50}")
+                print(f"📊 ИТОГИ ДЕМО-ТЕСТА")
+                print(f"{'='*50}")
+                print(f"✅ Успешно: {successful_count}")
+                print(f"❌ Ошибок: {failed_count}")
+                print(f"📋 Всего: {total_cards}")
+                print(f"📈 Успешность: {(successful_count/total_cards)*100:.1f}%")
+                print(f"📚 Обработано резюме: {len(processed_resumes)}")
+                print(f"{'='*50}")
+                
             else:
                 print("❌ Карточки не найдены")
                 
