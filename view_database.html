@@ -458,7 +458,7 @@
         async function initializeDatabase() {
             try {
                 // Загружаем данные из JSON файла
-                const response = await fetch('resume_data_20250731_190906.json');
+                const response = await fetch('resume_data_20250801_024557.json');
                 const data = await response.json();
                 
                 // Обрабатываем данные (новый формат из ultimate_parser)
@@ -523,7 +523,7 @@
                 console.error('Ошибка загрузки данных:', error);
                 document.getElementById('resume-tbody').innerHTML = `
                     <tr><td colspan="9" style="text-align: center; padding: 40px; color: #dc3545;">
-                        ❌ Ошибка загрузки данных. Убедитесь что файл resume_data_20250731_190906.json доступен.
+                        ❌ Ошибка загрузки данных. Убедитесь что файл resume_data_20250801_024557.json доступен.
                     </td></tr>
                 `;
             }

@@ -245,12 +245,36 @@ class UltimateWorkUaParser(WorkUaParser):
                 self.logger.error("❌ Не удалось перезапустить драйвер")
                 return False
             
-            # Переходим на страницу с резюме
-            self.logger.info("🌐 Восстанавливаем страницу с резюме...")
-            self.driver.get(self.base_url)
+            # Переходим на правильную страницу с резюме
+            current_page = self.session_state.get('current_page', 1)
+            if current_page > 1:
+                recovery_url = f"{self.base_url}?page={current_page}"
+                self.logger.info(f"🌐 Восстанавливаем страницу с резюме: страница {current_page}")
+                self.logger.info(f"🔗 URL восстановления: {recovery_url}")
+            else:
+                recovery_url = self.base_url
+                self.logger.info("🌐 Восстанавливаем страницу с резюме: страница 1")
+            
+            self.driver.get(recovery_url)
+            
+            # Ждем загрузки страницы
+            time.sleep(3)
+            
+            # Ждем загрузки карточек резюме
+            try:
+                from selenium.webdriver.support import expected_conditions as EC
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.common.by import By
+                
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".card.resume-link"))
+                )
+                self.logger.info("✅ Карточки резюме загружены после восстановления")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Карточки не загрузились: {e}")
             
             self.driver_restarts += 1
-            time.sleep(5)  # Стабилизация
+            time.sleep(2)  # Дополнительная стабилизация
             
             if self.is_driver_alive():
                 self.logger.info(f"✅ Драйвер перезапущен успешно (рестарт #{self.driver_restarts})")
@@ -441,64 +465,66 @@ class UltimateWorkUaParser(WorkUaParser):
                     
                     if not cards_to_process:
                         self.logger.info("⏭️ Нет новых карточек")
-                        continue
-                    
-                    # 🔄 НОВЫЙ ПОДХОД: Обработка по одной карточке с retry
-                    self.logger.info(f"\n🎯 НАДЕЖНАЯ ОБРАБОТКА: {len(cards_to_process)} карточек с retry механизмом")
-                    
-                    successful_count = 0
-                    failed_count = 0
-                    
-                    for i, card in enumerate(cards_to_process, 1):
-                        self.logger.info(f"\n📋 КАРТОЧКА {i}/{len(cards_to_process)}: {card['title']}")
+                        # НЕ используем continue - нужно все равно перейти на следующую страницу
+                        successful_count = 0
+                        failed_count = 0
+                    else:
+                        # 🔄 НОВЫЙ ПОДХОД: Обработка по одной карточке с retry
+                        self.logger.info(f"\n🎯 НАДЕЖНАЯ ОБРАБОТКА: {len(cards_to_process)} карточек с retry механизмом")
                         
-                        try:
-                            # Открываем одну вкладку для карточки
-                            self.safe_open_tab(card['url'], card['title'])
-                            self.safe_switch_to_tab(1)  # Переключаемся на новую вкладку
-                            
-                            # Обрабатываем с retry механизмом  
-                            success = self.parse_single_card_with_retry(card, 1)
-                            
-                            if success:
-                                successful_count += 1
-                                self.logger.info(f"✅ ИТОГО успешных: {successful_count}/{i}")
-                            else:
-                                failed_count += 1
-                                self.logger.warning(f"❌ ИТОГО неудачных: {failed_count}/{i}")
-                            
-                            # Закрываем вкладку
+                        successful_count = 0
+                        failed_count = 0
+                        
+                        for i, card in enumerate(cards_to_process, 1):
+                            self.logger.info(f"\n📋 КАРТОЧКА {i}/{len(cards_to_process)}: {card['title']}")
+                        
                             try:
-                                self.safe_close_tab()
-                            except:
-                                pass  # Вкладка могла уже закрыться при ошибке
-                            
-                            # Возвращаемся на главную вкладку
-                            try:
-                                self.safe_switch_to_tab(0)
-                            except:
-                                # Если не можем вернуться - перезапускаем драйвер
-                                self.restart_driver_bulletproof()
-                            
-                            # Сохраняем checkpoint после каждой карточки
-                            self.save_checkpoint()
-                            
-                            # Человекоподобная пауза между карточками
-                            if i < len(cards_to_process):
-                                pause = random.uniform(1, 3)
-                                self.logger.info(f"⏸️ Пауза {pause:.1f}s перед следующей карточкой...")
-                                time.sleep(pause)
+                                # Открываем одну вкладку для карточки
+                                self.safe_open_tab(card['url'], card['title'])
+                                self.safe_switch_to_tab(1)  # Переключаемся на новую вкладку
                                 
-                        except Exception as e:
-                            self.logger.error(f"❌ Критическая ошибка с карточкой {card['title']}: {e}")
-                            failed_count += 1
-                            self.session_state['failed_urls'].add(card['url'])
-                            
-                            # Попытка восстановления
-                            try:
-                                self.restart_driver_bulletproof()
-                            except:
-                                pass
+                                # Обрабатываем с retry механизмом  
+                                success = self.parse_single_card_with_retry(card, 1)
+                                
+                                if success:
+                                    successful_count += 1
+                                    self.logger.info(f"✅ ИТОГО успешных: {successful_count}/{i}")
+                                else:
+                                    failed_count += 1
+                                    self.logger.warning(f"❌ ИТОГО неудачных: {failed_count}/{i}")
+                                
+                                # Закрываем вкладку
+                                try:
+                                    self.safe_close_tab()
+                                except:
+                                    pass  # Вкладка могла уже закрыться при ошибке
+                                
+                                # Возвращаемся на главную вкладку
+                                try:
+                                    self.safe_switch_to_tab(0)
+                                except:
+                                    # Если не можем вернуться - перезапускаем драйвер
+                                    self.restart_driver_bulletproof()
+                                
+                                # Сохраняем checkpoint после каждой карточки
+                                self.save_checkpoint()
+                                
+                                # Человекоподобная пауза между карточками
+                                if i < len(cards_to_process):
+                                    pause = random.uniform(1, 3)
+                                    self.logger.info(f"⏸️ Пауза {pause:.1f}s перед следующей карточкой...")
+                                    time.sleep(pause)
+                                    
+                            except Exception as e:
+                                self.logger.error(f"❌ Критическая ошибка с карточкой {card['title']}: {e}")
+                                failed_count += 1
+                                self.session_state['failed_urls'].add(card['url'])
+                                
+                                # Попытка восстановления
+                                try:
+                                    self.restart_driver_bulletproof()
+                                except:
+                                    pass
                     
                     self.logger.info(f"\n📊 ИТОГИ СТРАНИЦЫ: ✅ {successful_count} успешных, ❌ {failed_count} неудачных")
                     
@@ -561,7 +587,12 @@ class UltimateWorkUaParser(WorkUaParser):
 if __name__ == "__main__":
     parser = UltimateWorkUaParser()
     
-    success = parser.ultimate_multitab_parsing(max_pages=2, max_cards_per_page=20)  # 🎯 100% ОБРАБОТКА ВСЕХ КАРТОЧЕК!
+    # Берем настройки из config.py
+    from config import PARSING_CONFIG
+    max_pages = PARSING_CONFIG.get('max_pages', 5)
+    max_cards = PARSING_CONFIG.get('max_cards_per_page', 20)
+    
+    success = parser.ultimate_multitab_parsing(max_pages=max_pages, max_cards_per_page=max_cards)  # 🎯 НАСТРОЙКИ ИЗ CONFIG!
     
     if success:
         print("\n🎊 ULTIMATE ПАРСИНГ ЗАВЕРШЕН УСПЕШНО!")
