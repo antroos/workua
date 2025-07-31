@@ -13,7 +13,23 @@ SELECTORS = {
     "card_name": ".strong-600",
     "card_age": "p:nth-child(4)",
     "card_location": "p:nth-child(4)",
-    "card_experience": "ul li"
+    "card_experience": "ul li",
+    
+    # Селекторы пагинации с автоадаптацией
+    "pagination_next": ".pagination li:last-child",  # РАБОЧИЙ СЕЛЕКТОР! Найден через тестирование
+    "pagination_container": "#pjax-resume-list > nav",
+    "pagination_current": "li.active",
+    "pagination_links": "ul.pagination li",
+    
+    # Альтернативные селекторы пагинации (fallback)
+    "pagination_next_alt": [
+        ".pagination .next",
+        "a[rel='next']", 
+        ".page-link:contains('Наступна')",
+        ".page-link:contains('>')",
+        "li:last-child a",
+        ".pagination li:last-child"
+    ]
 }
 
 # Настройки браузера
@@ -28,7 +44,15 @@ BROWSER_CONFIG = {
 PARSING_CONFIG = {
     "delay_between_pages": 2,  # секунды
     "delay_between_cards": 1,  # секунды
-    "max_retries": 3
+    "max_retries": 3,
+    
+    # Настройки пагинации
+    "max_pages": 3,  # Максимальное количество страниц для парсинга (3 страницы)
+    "max_cards_per_page": 14,  # Максимальное количество карточек на странице (все карточки)
+    "pagination_wait_timeout": 15,  # Время ожидания загрузки страницы
+    "pagination_retry_attempts": 3,  # Попытки при ошибках пагинации
+    "enable_pagination": True,  # Включить обработку пагинации
+    "pagination_auto_adapt": True  # Автоматическая адаптация селекторов пагинации
 }
 
 # Настройки сохранения данных

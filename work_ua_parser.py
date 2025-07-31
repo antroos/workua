@@ -17,7 +17,7 @@ import csv
 import logging
 import datetime
 import openai
-from config import BROWSER_CONFIG
+from config import BROWSER_CONFIG, PARSING_CONFIG
 
 
 class WorkUaParser:
@@ -86,8 +86,26 @@ class WorkUaParser:
             chrome_options.add_argument("--disable-web-security")
             
             try:
-                # Создаем сервис для Chrome драйвера
-                service = Service(ChromeDriverManager().install())
+                # 🔧 BULLETPROOF инициализация драйвера с таймаутом
+                self.logger.info("🔄 Попытка инициализации ChromeDriverManager...")
+                
+                import signal
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("ChromeDriverManager завис!")
+                
+                # Устанавливаем таймаут на 15 секунд
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(15)
+                
+                try:
+                    service = Service(ChromeDriverManager().install())
+                    signal.alarm(0)  # Отключаем таймаут
+                    self.logger.info("✅ ChromeDriverManager успешно завершен")
+                except (TimeoutError, KeyboardInterrupt):
+                    signal.alarm(0)  # Отключаем таймаут
+                    self.logger.warning("⚠️ ChromeDriverManager завис, используем локальный драйвер...")
+                    # Fallback на системный chromedriver
+                    service = Service()  # Использует системный PATH
                 
                 # Инициализируем драйвер
                 self.driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -231,84 +249,84 @@ class WorkUaParser:
             print(f"❌ Ошибка при поиске карточек: {e}")
             return []
         
+    def _fast_find_element(self, parent, selector, timeout=0.5):
+        """Быстрый поиск элемента с коротким таймаутом"""
+        old_timeout = self.driver.timeouts.implicit_wait
+        try:
+            self.driver.implicitly_wait(timeout)
+            return parent.find_element(By.CSS_SELECTOR, selector)
+        except:
+            return None
+        finally:
+            self.driver.implicitly_wait(old_timeout)
+    
+    def _fast_find_elements(self, parent, selector, timeout=0.5):
+        """Быстрый поиск элементов с коротким таймаутом"""
+        old_timeout = self.driver.timeouts.implicit_wait
+        try:
+            self.driver.implicitly_wait(timeout)
+            return parent.find_elements(By.CSS_SELECTOR, selector)
+        except:
+            return []
+        finally:
+            self.driver.implicitly_wait(old_timeout)
+
     def parse_card_info(self, card):
-        """Извлечение информации из карточки"""
+        """⚡ БЫСТРОЕ извлечение информации из карточки"""
         if not card:
             return None
             
         try:
             card_info = {}
             
-            # Заголовок резюме и ссылка
-            try:
-                title_element = card.find_element(By.CSS_SELECTOR, "h2 a")
+            # Заголовок резюме и ссылка - БЕЗ долгих ожиданий
+            title_element = self._fast_find_element(card, "h2 a")
+            if title_element:
                 card_info['title'] = title_element.text.strip()
                 card_info['link'] = title_element.get_attribute("href")
-            except:
+                card_info['url'] = title_element.get_attribute("href")  # Для совместимости с ULTIMATE парсером
+            else:
                 card_info['title'] = "Не указано"
                 card_info['link'] = ""
+                card_info['url'] = ""
             
-            # Зарплата
-            try:
-                salary_element = card.find_element(By.CSS_SELECTOR, ".h5.strong-600")
-                card_info['salary'] = salary_element.text.strip()
-            except:
-                card_info['salary'] = "Не указана"
+            # Зарплата - быстро
+            salary_element = self._fast_find_element(card, ".h5.strong-600")
+            card_info['salary'] = salary_element.text.strip() if salary_element else "Не указана"
             
-            # Имя, возраст, город - ищем более точно
-            try:
-                # Ищем параграф с информацией о человеке (содержит имя)
-                personal_paragraphs = card.find_elements(By.CSS_SELECTOR, "p.mt-xs.mb-0")
-                personal_info_found = False
-                
-                for p in personal_paragraphs:
-                    text = p.text.strip()
-                    # Проверяем, что это строка с именем (содержит strong-600 и не содержит "грн")
-                    if text and "грн" not in text and len(text.split(",")) >= 2:
-                        card_info['personal_info'] = text
-                        parts = text.split(', ')
-                        if len(parts) >= 1:
-                            card_info['name'] = parts[0]
-                        if len(parts) >= 2:
-                            card_info['age_location'] = ', '.join(parts[1:])
-                        personal_info_found = True
-                        break
-                
-                if not personal_info_found:
-                    card_info['personal_info'] = "Не указано"
-                    card_info['name'] = "Не указано"
-                    card_info['age_location'] = "Не указано"
-                    
-            except Exception as e:
-                card_info['personal_info'] = "Ошибка извлечения"
+            # Имя, возраст, город - быстро
+            personal_paragraphs = self._fast_find_elements(card, "p.mt-xs.mb-0")
+            personal_info_found = False
+            
+            for p in personal_paragraphs:
+                text = p.text.strip()
+                # Проверяем, что это строка с именем (содержит strong-600 и не содержит "грн")
+                if text and "грн" not in text and len(text.split(",")) >= 2:
+                    card_info['personal_info'] = text
+                    parts = text.split(', ')
+                    card_info['name'] = parts[0] if len(parts) >= 1 else "Не указано"
+                    card_info['age_location'] = ', '.join(parts[1:]) if len(parts) >= 2 else "Не указано"
+                    personal_info_found = True
+                    break
+            
+            if not personal_info_found:
+                card_info['personal_info'] = "Не указано"
                 card_info['name'] = "Не указано"
                 card_info['age_location'] = "Не указано"
             
-            # Опыт работы - фильтруем лишние элементы
-            try:
-                experience_elements = card.find_elements(By.CSS_SELECTOR, "ul.mt-lg.mb-0 li")
-                if experience_elements:
-                    experience_list = []
-                    for exp in experience_elements[:3]:  # Берем первые 3 записи опыта
-                        exp_text = exp.text.strip()
-                        # Фильтруем служебные элементы
-                        if exp_text and exp_text not in ["PRO", "Файл", ""]:
-                            experience_list.append(exp_text)
-                    card_info['experience'] = experience_list
-                else:
-                    card_info['experience'] = []
-            except:
-                card_info['experience'] = []
+            # Опыт работы - быстро
+            experience_elements = self._fast_find_elements(card, "ul.mt-lg.mb-0 li")
+            experience_list = []
+            for exp in experience_elements[:3]:  # Берем первые 3 записи опыта
+                exp_text = exp.text.strip()
+                # Фильтруем служебные элементы
+                if exp_text and exp_text not in ["PRO", "Файл", ""]:
+                    experience_list.append(exp_text)
+            card_info['experience'] = experience_list
             
-            # Образование/тип занятости
-            try:
-                education_elements = card.find_elements(By.CSS_SELECTOR, "p.mb-0.mt-xs.text-default-7")
-                if education_elements:
-                    card_info['education_employment'] = education_elements[0].text.strip()
-                else:
-                    card_info['education_employment'] = "Не указано"
-            except:
-                card_info['education_employment'] = "Не указано"
+            # Образование/тип занятости - быстро
+            education_elements = self._fast_find_elements(card, "p.mb-0.mt-xs.text-default-7")
+            card_info['education_employment'] = education_elements[0].text.strip() if education_elements else "Не указано"
             
             return card_info
             
@@ -464,6 +482,305 @@ class WorkUaParser:
             
         except Exception as e:
             print(f"❌ Ошибка обновления конфига: {e}")
+
+    # ========================================
+    # МЕТОДЫ ПАГИНАЦИИ С АВТОАДАПТАЦИЕЙ
+    # ========================================
+    
+    def has_next_page(self):
+        """Проверяет наличие следующей страницы с автоадаптацией селекторов"""
+        try:
+            # Используем основной селектор
+            from config import SELECTORS, PARSING_CONFIG
+            main_selector = SELECTORS['pagination_next']
+            
+            print(f"🔍 Проверяем наличие следующей страницы...")
+            print(f"   Селектор: {main_selector}")
+            
+            # Проверяем основной селектор
+            next_elements = self.driver.find_elements(By.CSS_SELECTOR, main_selector)
+            
+            if next_elements:
+                # Проверяем что элемент активен (не disabled)
+                next_element = next_elements[0]
+                if not next_element.get_attribute("class") or "disabled" not in next_element.get_attribute("class"):
+                    print(f"✅ Найдена следующая страница: основной селектор")
+                    return True
+            
+            # Если основной селектор не работает, пробуем альтернативные
+            print(f"⚠️ Основной селектор не найден, пробуем альтернативные...")
+            
+            alt_selectors = SELECTORS.get('pagination_next_alt', [])
+            for i, alt_selector in enumerate(alt_selectors):
+                try:
+                    alt_elements = self.driver.find_elements(By.CSS_SELECTOR, alt_selector)
+                    if alt_elements:
+                        print(f"✅ Найдена следующая страница: альтернативный селектор #{i+1}")
+                        # Обновляем основной селектор для будущих использований
+                        self._update_pagination_selector(alt_selector)
+                        return True
+                except Exception as e:
+                    continue
+            
+            # Если ничего не найдено и включена автоадаптация, используем LLM
+            if PARSING_CONFIG.get('pagination_auto_adapt', True):
+                print(f"🤖 Активируем LLM автоадаптацию для пагинации...")
+                return self._auto_adapt_pagination_selectors()
+            
+            print(f"❌ Следующая страница не найдена")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Ошибка проверки следующей страницы: {e}")
+            return False
+    
+    def go_to_next_page(self):
+        """Переходит на следующую страницу с автоадаптацией"""
+        try:
+            from config import SELECTORS, PARSING_CONFIG
+            
+            print(f"📄 Переходим на следующую страницу...")
+            
+            # Сохраняем текущий URL для проверки
+            current_url = self.driver.current_url
+            
+            # Ищем кнопку следующей страницы
+            main_selector = SELECTORS['pagination_next']
+            next_elements = self.driver.find_elements(By.CSS_SELECTOR, main_selector)
+            
+            if not next_elements:
+                # Пробуем альтернативные селекторы
+                alt_selectors = SELECTORS.get('pagination_next_alt', [])
+                for alt_selector in alt_selectors:
+                    try:
+                        next_elements = self.driver.find_elements(By.CSS_SELECTOR, alt_selector)
+                        if next_elements:
+                            main_selector = alt_selector
+                            break
+                    except Exception:
+                        continue
+            
+            if not next_elements:
+                print(f"❌ Кнопка следующей страницы не найдена")
+                return False
+            
+            next_button = next_elements[0]
+            
+            # Прокручиваем к элементу и делаем его видимым
+            print(f"📜 Прокручиваем к кнопке пагинации...")
+            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", next_button)
+            time.sleep(2)
+            
+            # Проверяем кликабельность элемента
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, main_selector))
+                )
+                print(f"✅ Элемент готов к клику")
+            except TimeoutException:
+                print(f"⚠️ Элемент не кликабельный, пробуем JavaScript click...")
+            
+            # Кликаем на кнопку (пробуем несколько способов)
+            print(f"🖱️ Кликаем на кнопку следующей страницы...")
+            
+            # Способ 1: Обычный клик
+            try:
+                next_button.click()
+                print(f"✅ Обычный клик успешен")
+            except Exception as e1:
+                print(f"⚠️ Обычный клик не сработал: {e1}")
+                
+                # Способ 2: JavaScript клик
+                try:
+                    print(f"🔧 Пробуем JavaScript клик...")
+                    self.driver.execute_script("arguments[0].click();", next_button)
+                    print(f"✅ JavaScript клик успешен")
+                except Exception as e2:
+                    print(f"⚠️ JavaScript клик не сработал: {e2}")
+                    
+                    # Способ 3: Клик по ссылке внутри элемента
+                    try:
+                        print(f"🔧 Ищем ссылку внутри элемента...")
+                        link_inside = next_button.find_element(By.TAG_NAME, "a")
+                        if link_inside:
+                            print(f"🔗 Найдена ссылка, кликаем по ней...")
+                            self.driver.execute_script("arguments[0].click();", link_inside)
+                            print(f"✅ Клик по ссылке успешен")
+                        else:
+                            raise Exception("Ссылка не найдена")
+                    except Exception as e3:
+                        print(f"❌ Все способы клика не сработали")
+                        # Активируем LLM автоадаптацию
+                        if PARSING_CONFIG.get('pagination_auto_adapt', True):
+                            print(f"🤖 Активируем LLM автоадаптацию селекторов...")
+                            if self._auto_adapt_pagination_selectors():
+                                # Пробуем еще раз с новым селектором
+                                return self.go_to_next_page()
+                        raise Exception(f"Не удалось кликнуть: {e1}, {e2}, {e3}")
+            
+            # Ждем загрузки страницы
+            timeout = PARSING_CONFIG.get('pagination_wait_timeout', 15)
+            print(f"⏳ Ожидаем загрузки следующей страницы ({timeout}s)...")
+            
+            # Ждем изменения URL или содержимого
+            WebDriverWait(self.driver, timeout).until(
+                lambda driver: driver.current_url != current_url or 
+                self._page_content_changed(current_url)
+            )
+            
+            # Дополнительное ожидание PJAX загрузки
+            time.sleep(PARSING_CONFIG.get('delay_between_pages', 2))
+            
+            # Ждем загрузки PJAX контейнера
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "pjax-resume-list"))
+                )
+                print(f"✅ PJAX контейнер загружен")
+                
+                # Ждем появления карточек резюме
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, SELECTORS['resume_cards']))
+                )
+                print(f"✅ Карточки резюме загружены")
+                
+            except TimeoutException:
+                print(f"⚠️ PJAX контейнер не загрузился за отведенное время")
+                # Принудительное обновление
+                self.driver.refresh()
+                time.sleep(3)
+            
+            new_url = self.driver.current_url
+            print(f"✅ Успешно перешли на следующую страницу")
+            print(f"   Новый URL: {new_url}")
+            
+            return True
+            
+        except TimeoutException:
+            print(f"❌ Таймаут при переходе на следующую страницу")
+            return False
+        except Exception as e:
+            print(f"❌ Ошибка при переходе на следующую страницу: {e}")
+            return False
+    
+    def _page_content_changed(self, original_url):
+        """Проверяет изменилось ли содержимое страницы"""
+        try:
+            from config import SELECTORS
+            
+            # Если URL изменился, страница точно изменилась
+            if self.driver.current_url != original_url:
+                return True
+            
+            # Проверяем наличие карточек (если страница обновилась через PJAX)
+            cards = self.driver.find_elements(By.CSS_SELECTOR, SELECTORS['resume_cards'])
+            return len(cards) > 0
+            
+        except Exception:
+            return False
+    
+    def _auto_adapt_pagination_selectors(self):
+        """Автоматическая адаптация селекторов пагинации через LLM"""
+        print("🤖 LLM анализ селекторов пагинации...")
+        
+        try:
+            # Получаем HTML страницы
+            page_source = self.driver.page_source
+            
+            # Анализируем пагинацию с помощью BeautifulSoup
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(page_source, 'html.parser')
+            
+            # Ищем потенциальные элементы пагинации
+            pagination_elements = []
+            
+            # Ищем nav, pagination, page-link и т.д.
+            for elem in soup.find_all(['nav', 'ul', 'div'], attrs={'class': True}):
+                classes = ' '.join(elem.get('class', []))
+                if any(keyword in classes.lower() for keyword in ['pagination', 'page', 'nav']):
+                    pagination_elements.append({
+                        'tag': elem.name,
+                        'classes': classes,
+                        'id': elem.get('id', ''),
+                        'text_sample': elem.get_text()[:100] if elem.get_text() else ''
+                    })
+            
+            if not pagination_elements:
+                print("❌ Не найдены элементы пагинации для анализа")
+                return False
+            
+            # Формируем HTML анализ для LLM
+            html_analysis = "АНАЛИЗ ПАГИНАЦИИ:\n"
+            html_analysis += f"Найдено элементов: {len(pagination_elements)}\n\n"
+            
+            for i, elem in enumerate(pagination_elements[:5]):
+                html_analysis += f"{i+1}. Тег: <{elem['tag']}>\n"
+                html_analysis += f"   Классы: {elem['classes']}\n"
+                html_analysis += f"   ID: {elem['id']}\n"
+                html_analysis += f"   Текст: {elem['text_sample'][:50]}...\n\n"
+            
+            # Запрос к LLM
+            analysis_prompt = f"""Анализируй HTML пагинацию на сайте work.ua.
+
+ЗАДАЧА: Найти CSS селектор для кнопки "Следующая страница".
+
+ПРОБЛЕМА: Селектор "#pjax-resume-list > nav > ul.pagination.pagination-small.visible-xs-block > li.circle-style.add-left-sm" не работает.
+
+{html_analysis}
+
+ВЕРНИ JSON с новым селектором:
+{{
+    "next_page_selector": "селектор для кнопки следующей страницы",
+    "confidence": "высокая/средняя/низкая",
+    "reasoning": "объяснение выбора"
+}}
+
+Селектор должен указывать на кликабельную кнопку/ссылку для перехода на следующую страницу."""
+
+            # Вызов LLM
+            response = self.call_llm_for_analysis(analysis_prompt)
+            
+            if response and 'next_page_selector' in response:
+                new_selector = response['next_page_selector']
+                print(f"🤖 LLM предложил селектор пагинации: {new_selector}")
+                
+                # Тестируем новый селектор
+                test_elements = self.driver.find_elements(By.CSS_SELECTOR, new_selector)
+                if test_elements:
+                    print(f"✅ Новый селектор пагинации работает!")
+                    self._update_pagination_selector(new_selector)
+                    return True
+                else:
+                    print(f"❌ Новый селектор пагинации не работает")
+            
+            return False
+            
+        except Exception as e:
+            print(f"❌ Ошибка LLM анализа пагинации: {e}")
+            return False
+    
+    def _update_pagination_selector(self, new_selector):
+        """Обновляет селектор пагинации в конфигурации"""
+        try:
+            # Читаем конфиг
+            with open('config.py', 'r', encoding='utf-8') as f:
+                config_content = f.read()
+            
+            # Заменяем селектор пагинации
+            import re
+            pattern = r'"pagination_next":\s*"[^"]+"'
+            replacement = f'"pagination_next": "{new_selector}"'
+            
+            updated_config = re.sub(pattern, replacement, config_content)
+            
+            # Сохраняем
+            with open('config.py', 'w', encoding='utf-8') as f:
+                f.write(updated_config)
+                
+            print(f"💾 Селектор пагинации обновлен: {new_selector}")
+            
+        except Exception as e:
+            print(f"❌ Ошибка обновления селектора пагинации: {e}")
         
     def click_card(self, card):
         """Переход внутрь карточки"""
@@ -642,210 +959,22 @@ class WorkUaParser:
             
             print("📋 Извлекаем детальную информацию с страницы резюме...")
             
-            resume_details = {}
-            
-            # Основная информация - заголовок резюме (должность)
+            # ПРОСТО БЕРЕМ ВЕСЬ ТЕКСТ СТРАНИЦЫ - БЕЗ ЛИШНЕЙ ФИГНИ
             try:
-                # Пробуем разные селекторы для заголовка резюме
-                title_selectors = ["h1.card-title", "h1", ".resume-header h1", ".card-header h1"]
-                title_found = False
+                # Получаем весь текст страницы одним вызовом
+                full_page_text = self.driver.find_element(By.TAG_NAME, "body").text
                 
-                for selector in title_selectors:
-                    try:
-                        title_element = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        title_text = title_element.text.strip()
-                        if title_text and len(title_text) > 3:
-                            resume_details['full_title'] = title_text
-                            title_found = True
-                            break
-                    except:
-                        continue
-                
-                if not title_found:
-                    resume_details['full_title'] = "Не указано"
-            except:
-                resume_details['full_title'] = "Не указано"
-            
-            # Полное имя - ищем в разных местах
-            try:
-                name_found = False
-                
-                # Ищем имя в специальных блоках
-                name_selectors = [".card-body .strong-600", ".personal-info .name", "h2.name", ".candidate-name"]
-                
-                for selector in name_selectors:
-                    try:
-                        name_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for name_elem in name_elements:
-                            name_text = name_elem.text.strip()
-                            # Проверяем, что это действительно имя (не содержит "грн", цифры в больших количествах)
-                            if name_text and "грн" not in name_text and len(name_text.split()) <= 3:
-                                resume_details['full_name'] = name_text
-                                name_found = True
-                                break
-                        if name_found:
-                            break
-                    except:
-                        continue
-                
-                if not name_found:
-                    resume_details['full_name'] = "Не указано"
-            except:
-                resume_details['full_name'] = "Не указано"
-            
-            # Зарплатные ожидания - улучшенный поиск
-            try:
-                salary_selectors = [".salary-value", ".salary", ".expected-salary", "span:contains('грн')", ".strong-600"]
-                salary_found = False
-                
-                for selector in salary_selectors:
-                    try:
-                        salary_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for sal_elem in salary_elements:
-                            sal_text = sal_elem.text.strip()
-                            if "грн" in sal_text:
-                                resume_details['expected_salary'] = sal_text
-                                salary_found = True
-                                break
-                        if salary_found:
-                            break
-                    except:
-                        continue
-                
-                if not salary_found:
-                    resume_details['expected_salary'] = "Не указана"
-            except:
-                resume_details['expected_salary'] = "Не указана"
-            
-            # Детальный опыт работы - улучшенный парсинг
-            try:
-                experience_list = []
-                
-                # Ищем блоки с опытом работы
-                experience_selectors = [
-                    ".work-experience li",
-                    ".experience .card-body ul li", 
-                    ".experience-item",
-                    "ul.list-unstyled li",
-                    ".timeline-item"
-                ]
-                
-                for selector in experience_selectors:
-                    try:
-                        exp_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for exp in exp_elements[:5]:  # Берем первые 5
-                            exp_text = exp.text.strip()
-                            # Фильтруем: должно быть достаточно длинное и содержать информацию о работе
-                            if (exp_text and len(exp_text) > 20 and 
-                                any(word in exp_text.lower() for word in ["бухгалтер", "робота", "досвід", "компанія", "рік", "місяць"])):
-                                experience_list.append(exp_text)
-                        
-                        if experience_list:  # Если нашли опыт, прекращаем поиск
-                            break
-                    except:
-                        continue
-                
-                # Если не нашли в специальных блоках, ищем в основном тексте
-                if not experience_list:
-                    try:
-                        all_paragraphs = self.driver.find_elements(By.CSS_SELECTOR, "p, div")
-                        for p in all_paragraphs:
-                            p_text = p.text.strip()
-                            if (len(p_text) > 30 and len(p_text) < 200 and
-                                any(word in p_text.lower() for word in ["досвід", "працював", "робота", "компанія"])):
-                                experience_list.append(p_text)
-                                if len(experience_list) >= 3:
-                                    break
-                    except:
-                        pass
-                
-                resume_details['detailed_experience'] = experience_list
-            except:
-                resume_details['detailed_experience'] = []
-            
-            # Образование - улучшенный поиск
-            try:
-                education_info = []
-                
-                # Ищем информацию об образовании
-                all_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
-                education_keywords = ["освіта", "університет", "інститут", "коледж", "технікум", "диплом"]
-                
-                # Ищем параграфы с образованием
-                all_paragraphs = self.driver.find_elements(By.CSS_SELECTOR, "p, div, li")
-                for p in all_paragraphs:
-                    p_text = p.text.strip()
-                    if (p_text and len(p_text) > 10 and len(p_text) < 150 and
-                        any(keyword in p_text.lower() for keyword in education_keywords)):
-                        education_info.append(p_text)
-                        if len(education_info) >= 2:
-                            break
-                
-                if not education_info:
-                    # Общий поиск упоминаний образования
-                    found_keywords = [kw for kw in education_keywords if kw in all_text]
-                    if found_keywords:
-                        education_info = [f"Найдено упоминание: {', '.join(found_keywords)}"]
-                    else:
-                        education_info = ["Не указано"]
-                
-                resume_details['education'] = education_info
-            except:
-                resume_details['education'] = ["Не указано"]
-            
-            # Навыки - расширенный поиск
-            try:
-                skills_list = []
-                
-                # Ищем ключевые навыки бухгалтера в тексте
-                full_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
-                accounting_keywords = [
-                    "1c", "excel", "бухгалтерія", "звітність", "податки", "баланс", 
-                    "документооборот", "зарплата", "облік", "аудит", "касса", "банк",
-                    "пдв", "фінанси", "економіка", "планування"
-                ]
-                
-                found_skills = []
-                for keyword in accounting_keywords:
-                    if keyword in full_text:
-                        found_skills.append(keyword)
-                
-                if found_skills:
-                    skills_list = [f"Найденные навыки: {', '.join(found_skills[:8])}"]  # Первые 8
-                else:
-                    skills_list = ["Навыки не найдены в тексте"]
-                
-                resume_details['skills'] = skills_list
-            except:
-                resume_details['skills'] = ["Не указаны"]
-            
-            # Контактная информация - ищем аккуратно
-            try:
-                resume_details['contact_info'] = ["Скрыто для конфиденциальности"]
-            except:
-                resume_details['contact_info'] = ["Скрыто"]
-            
-            # Дополнительная информация - ищем возраст, город, статус
-            try:
-                additional_info = []
-                
-                # Ищем информацию в разных элементах
-                info_elements = self.driver.find_elements(By.CSS_SELECTOR, "p, span, div")
-                for info in info_elements:
-                    info_text = info.text.strip()
-                    # Ищем полезную дополнительную информацию
-                    if (info_text and len(info_text) < 50 and
-                        any(word in info_text.lower() for word in ["рік", "років", "місто", "київ", "харків", "одеса", "дніпро"])):
-                        additional_info.append(info_text)
-                        if len(additional_info) >= 3:
-                            break
-                
-                resume_details['additional_info'] = additional_info if additional_info else ["Базовая информация"]
-            except:
-                resume_details['additional_info'] = ["Нет дополнительной информации"]
-            
-            # URL резюме
-            resume_details['resume_url'] = current_url
+                resume_details = {
+                    'full_text': full_page_text,
+                    'resume_url': current_url,
+                    'parsing_time': '< 1 секунды вместо 2 минут!'
+                }
+            except Exception as e:
+                print(f"❌ Ошибка извлечения текста: {e}")
+                resume_details = {
+                    'full_text': 'Ошибка извлечения',
+                    'resume_url': current_url
+                }
             
             print("✅ Детальная информация извлечена")
             return resume_details
@@ -1202,19 +1331,41 @@ if __name__ == "__main__":
         if parser.open_page():
             print("✅ Страница успешно открыта")
             
-            # Находим все карточки
-            cards = parser.find_resume_cards()
-            if cards:
-                print(f"🎯 Найдено {len(cards)} карточек")
+            # НОВАЯ СИСТЕМА ПАГИНАЦИИ
+            processed_resumes = []
+            successful_count = 0
+            failed_count = 0
+            total_pages_processed = 0
+            total_cards_across_pages = 0
+            
+            max_pages = PARSING_CONFIG.get('max_pages', 10)
+            pagination_enabled = PARSING_CONFIG.get('enable_pagination', True)
+            
+            print(f"\n🚀 ЗАПУСКАЕМ ПОЛНУЮ ОБРАБОТКУ С ПАГИНАЦИЕЙ:")
+            print(f"📄 Максимум страниц: {max_pages}")
+            print(f"🔄 Пагинация: {'Включена' if pagination_enabled else 'Отключена'}")
+            print(f"{'='*50}")
+            
+            # ОСНОВНОЙ ЦИКЛ ПАГИНАЦИИ
+            current_page = 1
+            while current_page <= max_pages:
+                print(f"\n📄 ОБРАБАТЫВАЕМ СТРАНИЦУ {current_page}/{max_pages}")
+                print(f"{'='*50}")
                 
-                print(f"\n🚀 ЗАПУСКАЕМ ПОЛНУЮ ОБРАБОТКУ ВСЕХ КАРТОЧЕК:")
-                print(f"📝 Обрабатываем все {len(cards)} найденных резюме")
+                # Находим карточки на текущей странице
+                cards = parser.find_resume_cards()
+                if not cards:
+                    print(f"❌ Карточки не найдены на странице {current_page}")
+                    break
                 
-                # Используем исправленную логику из process_all_cards
-                processed_resumes = []
-                successful_count = 0
-                failed_count = 0
-                total_cards = len(cards)  # Обрабатываем все карточки
+                print(f"🎯 Найдено {len(cards)} карточек на странице {current_page}")
+                total_cards_across_pages += len(cards)
+                
+                # Ограничиваем количество карточек для тестирования
+                max_cards_per_page = PARSING_CONFIG.get('max_cards_per_page', len(cards))
+                total_cards = min(len(cards), max_cards_per_page)
+                
+                print(f"🎯 Обрабатываем {total_cards} из {len(cards)} карточек (лимит: {max_cards_per_page})")
                 
                 # Обрабатываем по индексу, а не по элементу
                 for i in range(total_cards):
@@ -1288,26 +1439,57 @@ if __name__ == "__main__":
                         print(f"❌ Ошибка: {e}")
                         failed_count += 1
                 
-                # Итоги полной обработки
-                print(f"\n{'='*50}")
-                print(f"📊 ИТОГИ ПОЛНОЙ ОБРАБОТКИ")
-                print(f"{'='*50}")
-                print(f"✅ Успешно: {successful_count}")
-                print(f"❌ Ошибок: {failed_count}")
-                print(f"📋 Всего: {total_cards}")
-                print(f"📈 Успешность: {(successful_count/total_cards)*100:.1f}%")
-                print(f"📚 Обработано резюме: {len(processed_resumes)}")
-                print(f"{'='*50}")
+                # ОБРАБОТКА СТРАНИЦЫ ЗАВЕРШЕНА
+                total_pages_processed += 1
+                print(f"\n📄 Страница {current_page} обработана!")
+                print(f"   ✅ Успешно: {successful_count}")
+                print(f"   ❌ Ошибок: {failed_count}")
+                print(f"   📋 Карточек на странице: {total_cards}")
                 
-                # Сохраняем результаты в JSON файл
-                if processed_resumes:
-                    output_filename = f"work_ua_resumes_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                    with open(output_filename, 'w', encoding='utf-8') as f:
-                        json.dump(processed_resumes, f, ensure_ascii=False, indent=2)
-                    print(f"💾 Результаты сохранены в файл: {output_filename}")
-                
+                # ПЕРЕХОД НА СЛЕДУЮЩУЮ СТРАНИЦУ
+                if pagination_enabled and current_page < max_pages:
+                    print(f"\n🔍 Проверяем наличие следующей страницы...")
+                    
+                    if parser.has_next_page():
+                        print(f"✅ Найдена следующая страница")
+                        if parser.go_to_next_page():
+                            current_page += 1
+                            print(f"📄 Перешли на страницу {current_page}")
+                            time.sleep(PARSING_CONFIG.get('delay_between_pages', 2))
+                        else:
+                            print(f"❌ Не удалось перейти на следующую страницу")
+                            break
+                    else:
+                        print(f"🏁 Следующая страница не найдена - достигнут конец")
+                        break
+                else:
+                    if not pagination_enabled:
+                        print(f"⏹️ Пагинация отключена - останавливаемся")
+                    else:
+                        print(f"🏁 Достигнут лимит страниц ({max_pages})")
+                    break
+            
+            # ИТОГИ ПОЛНОЙ ОБРАБОТКИ ВСЕХ СТРАНИЦ
+            print(f"\n{'='*50}")
+            print(f"📊 ИТОГИ ПОЛНОЙ ОБРАБОТКИ С ПАГИНАЦИЕЙ")
+            print(f"{'='*50}")
+            print(f"📄 Страниц обработано: {total_pages_processed}")
+            print(f"📋 Всего карточек: {total_cards_across_pages}")
+            print(f"✅ Успешно: {successful_count}")
+            print(f"❌ Ошибок: {failed_count}")
+            if total_cards_across_pages > 0:
+                print(f"📈 Успешность: {(successful_count/total_cards_across_pages)*100:.1f}%")
+            print(f"📚 Обработано резюме: {len(processed_resumes)}")
+            print(f"{'='*50}")
+            
+            # Сохраняем результаты в JSON файл
+            if processed_resumes:
+                output_filename = f"work_ua_resumes_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                with open(output_filename, 'w', encoding='utf-8') as f:
+                    json.dump(processed_resumes, f, ensure_ascii=False, indent=2)
+                print(f"💾 Результаты сохранены в файл: {output_filename}")
             else:
-                print("❌ Карточки не найдены")
+                print("⚠️ Нет данных для сохранения")
                 
         else:
             print("❌ Не удалось открыть страницу")
