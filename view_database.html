@@ -458,38 +458,56 @@
         async function initializeDatabase() {
             try {
                 // Загружаем данные из JSON файла
-                const response = await fetch('база_резюме_полная.json');
+                const response = await fetch('resume_data_20250731_190906.json');
                 const data = await response.json();
                 
-                // Обрабатываем данные
-                resumesData = data.map(item => {
-                    const detailed = item.detailed_info || {};
-                    const card = item.card_info || {};
+                // Обрабатываем данные (новый формат из ultimate_parser)
+                resumesData = data.map((item, index) => {
+                    // Извлекаем возраст и город из age_location
+                    let age = 'Не указан';
+                    let location = 'Не указан';
+                    if (item.age_location) {
+                        const parts = item.age_location.split(', ');
+                        if (parts.length >= 2) {
+                            age = parts[0]; // "41 рік"
+                            location = parts.slice(1).join(', '); // "Тернівка"
+                        } else {
+                            location = item.age_location;
+                        }
+                    }
                     
-                    const contact = detailed.contact_info || {};
+                    // Извлекаем навыки из full_text
+                    const skillsRegex = /Знання і навички\s*([\s\S]*?)(?:\n\n|\nДодаткова інформація|\nЗапропонувати вакансію|$)/i;
+                    const skillsMatch = item.full_text ? item.full_text.match(skillsRegex) : null;
+                    let skills = [];
+                    if (skillsMatch && skillsMatch[1]) {
+                        skills = skillsMatch[1].split('\n')
+                            .map(s => s.trim())
+                            .filter(s => s && s.length > 1);
+                    }
                     
                     return {
-                        id: item.id || item.card_number || Math.random(),
-                        name: detailed.full_name || card.name || card.title || 'Не указано',
-                        position: detailed.position || card.title || 'Не указано',
-                        salary: detailed.salary || card.salary || 'Не указана',
-                        location: contact.location || detailed.location || card.age_location || 'Не указан',
-                        age: contact.age || detailed.age || 'Не указан',
-                        birth_date: detailed.birth_date || 'Не указана',
-                        address: contact.address || detailed.address || 'Не указан',
-                        phone: contact.phone || detailed.phone || 'Не указан',
-                        skills: detailed.professional_skills || [],
-                        professional_skills: detailed.professional_skills || [],
-                        personal_skills: detailed.personal_skills || [],
-                        languages: detailed.languages || [],
-                        experience: detailed.experience || [],
-                        education: detailed.education || [],
-                        additional_info: detailed.additional_info || '',
-                        detailed_description: detailed.detailed_description || '',
-                        url: card.link || detailed.resume_url || item.resume_url || '#',
-                        created_at: item.created_at || '',
-                        updated_at: item.updated_at || '',
-                        parsed_with: detailed.parsed_with || 'Автоматически'
+                        id: index + 1,
+                        name: item.name || 'Не указано',
+                        position: item.title || 'Не указано', 
+                        salary: item.salary || 'Не указана',
+                        location: location,
+                        age: age,
+                        birth_date: 'Не указана',
+                        address: location,
+                        phone: 'Скрыт',
+                        skills: skills,
+                        professional_skills: skills,
+                        personal_skills: [],
+                        languages: [],
+                        experience: Array.isArray(item.experience) ? item.experience : [],
+                        education: item.education_employment ? [item.education_employment] : [],
+                        additional_info: '',
+                        detailed_description: item.full_text || '',
+                        url: item.url || item.link || '#',
+                        created_at: '',
+                        updated_at: '',
+                        parsed_with: 'Ultimate Parser v2.0'
                     };
                 });
                 
@@ -505,7 +523,7 @@
                 console.error('Ошибка загрузки данных:', error);
                 document.getElementById('resume-tbody').innerHTML = `
                     <tr><td colspan="9" style="text-align: center; padding: 40px; color: #dc3545;">
-                        ❌ Ошибка загрузки данных. Убедитесь что файл база_резюме_полная.json доступен.
+                        ❌ Ошибка загрузки данных. Убедитесь что файл resume_data_20250731_190906.json доступен.
                     </td></tr>
                 `;
             }

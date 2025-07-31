@@ -31,7 +31,7 @@ def start_server(port=8000):
     # Проверяем что нужные файлы существуют
     required_files = [
         'view_database.html',
-        'база_резюме_полная.json'
+        'resume_data_20250731_190906.json'
     ]
     
     missing_files = [f for f in required_files if not os.path.exists(f)]
@@ -45,7 +45,7 @@ def start_server(port=8000):
             print(f"🌐 Запускаем веб-сервер...")
             print(f"📡 Адрес: http://localhost:{port}")
             print(f"📄 Страница: http://localhost:{port}/view_database.html")
-            print(f"💾 База данных: {os.path.getsize('база_резюме_полная.json')} байт")
+            print(f"💾 База данных: {os.path.getsize('resume_data_20250731_190906.json')} байт")
             print()
             print(f"🔗 Откройте в браузере: http://localhost:{port}/view_database.html")
             print(f"⏹️  Для остановки нажмите Ctrl+C")
@@ -85,7 +85,7 @@ def show_stats():
     """Показать краткую статистику"""
     try:
         import json
-        with open('база_резюме_полная.json', 'r', encoding='utf-8') as f:
+        with open('resume_data_20250731_190906.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         quality_count = sum(1 for item in data if item.get('resume_data', {}).get('detailed_info'))
@@ -93,7 +93,7 @@ def show_stats():
         print("📊 СТАТИСТИКА БАЗЫ ДАННЫХ:")
         print(f"   📚 Всего записей: {len(data)}")
         print(f"   ✅ Качественных: {quality_count}")
-        print(f"   💾 Размер файла: {os.path.getsize('база_резюме_полная.json')} байт")
+        print(f"   💾 Размер файла: {os.path.getsize('resume_data_20250731_190906.json')} байт")
         print()
         
     except Exception as e:
@@ -121,4 +121,4 @@ if __name__ == "__main__":
         print("\n💡 АЛЬТЕРНАТИВНЫЕ СПОСОБЫ:")
         print("1. Попробуйте другой порт: python start_viewer.py 8001")
         print("2. Откройте файл view_database.html напрямую в браузере")
-        print("3. Проверьте что файлы база_резюме_полная.json и view_database.html существуют") 
+        print("3. Проверьте что файлы resume_data_20250731_190906.json и view_database.html существуют") 
