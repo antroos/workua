@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗂️ База данных резюме бухгалтеров</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-item {
+            text-align: center;
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 5px;
+            min-width: 120px;
+        }
+        
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .controls {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .search-box {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 25px;
+            font-size: 16px;
+            width: 300px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        
+        .search-box:focus {
+            border-color: #667eea;
+        }
+        
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 20px;
+            background: #f0f0f0;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .filter-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            padding: 20px;
+        }
+        
+        .resume-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        .resume-table th {
+            background: #f8f9fa;
+            padding: 15px 10px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #dee2e6;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .resume-table td {
+            padding: 12px 10px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+        
+        .resume-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .name-cell {
+            font-weight: 600;
+            color: #333;
+            min-width: 150px;
+        }
+        
+        .position-cell {
+            color: #667eea;
+            font-weight: 500;
+            min-width: 180px;
+        }
+        
+        .salary-cell {
+            color: #28a745;
+            font-weight: 600;
+            text-align: center;
+            min-width: 100px;
+        }
+        
+        .location-cell {
+            color: #6c757d;
+            text-align: center;
+            min-width: 100px;
+        }
+        
+        .skills-cell {
+            max-width: 200px;
+            font-size: 12px;
+        }
+        
+        .skill-tag {
+            display: inline-block;
+            background: #e9ecef;
+            padding: 2px 8px;
+            margin: 1px;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+        
+        .experience-cell {
+            max-width: 250px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+        
+        .url-cell {
+            text-align: center;
+            min-width: 80px;
+        }
+        
+        .url-link {
+            color: #667eea;
+            text-decoration: none;
+            padding: 5px 10px;
+            border: 1px solid #667eea;
+            border-radius: 15px;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        
+        .url-link:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .hidden-row {
+            display: none;
+        }
+        
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+            font-size: 18px;
+        }
+        
+        .footer {
+            padding: 20px;
+            text-align: center;
+            background: #f8f9fa;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        
+        .details-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 15px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        
+        .details-btn:hover {
+            background: #5a6fd8;
+            transform: scale(1.05);
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s;
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 2% auto;
+            padding: 0;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+            animation: slideIn 0.3s;
+        }
+        
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 15px 15px 0 0;
+            position: relative;
+        }
+        
+        .modal-body {
+            padding: 20px;
+        }
+        
+        .close {
+            color: white;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        
+        .close:hover {
+            opacity: 0.7;
+        }
+        
+        .detail-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .detail-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .detail-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .detail-list li {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .detail-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .skill-badge {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            margin: 2px;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .stats {
+                flex-direction: column;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .search-box {
+                width: 100%;
+            }
+            
+            .resume-table {
+                font-size: 12px;
+            }
+            
+            .resume-table th,
+            .resume-table td {
+                padding: 8px 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗂️ База данных резюме бухгалтеров</h1>
+            <p>Собрано с work.ua • Обновлено: 30 июля 2025</p>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-number" id="total-resumes">0</div>
+                    <div>Всего резюме</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="quality-resumes">0</div>
+                    <div>Качественных</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="avg-salary">0</div>
+                    <div>Ср. зарплата</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="cities-count">0</div>
+                    <div>Городов</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <input type="text" class="search-box" id="search-input" placeholder="🔍 Поиск по имени, должности, навыкам...">
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">Все</button>
+                <button class="filter-btn" data-filter="kiev">Киев</button>
+                <button class="filter-btn" data-filter="with-salary">С зарплатой</button>
+                <button class="filter-btn" data-filter="1c">1С навыки</button>
+                <button class="filter-btn" data-filter="experience">Опытные</button>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table class="resume-table" id="resume-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>👤 Имя</th>
+                        <th>💼 Должность</th>
+                        <th>💰 Зарплата</th>
+                        <th>📍 Город</th>
+                        <th>🎂 Возраст</th>
+                        <th>🔧 Навыки</th>
+                        <th>📋 Опыт</th>
+                        <th>📄 Подробнее</th>
+                        <th>🔗 Ссылка</th>
+                    </tr>
+                </thead>
+                <tbody id="resume-tbody">
+                    <!-- Данные будут загружены через JavaScript -->
+                </tbody>
+            </table>
+            <div id="no-results" class="no-results" style="display: none;">
+                🔍 Ничего не найдено по вашему запросу
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>📊 Данные собраны автоматически с помощью парсера Work.ua • OpenAI GPT-3.5</p>
+            <p>💾 База данных: SQLite • Экспорт: JSON • Веб-интерфейс: HTML/JS</p>
+        </div>
+    </div>
+
+    <!-- Модальное окно для детальной информации -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close">&times;</span>
+                <h2 id="modalTitle">👤 Детальная информация о кандидате</h2>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Контент будет добавлен через JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Здесь будут загружаться данные
+        let resumesData = [];
+        let filteredData = [];
+
+        // Функция для инициализации
+        async function initializeDatabase() {
+            try {
+                // Загружаем данные из JSON файла
+                const response = await fetch('база_резюме_полная.json');
+                const data = await response.json();
+                
+                // Обрабатываем данные
+                resumesData = data.map(item => {
+                    const detailed = item.detailed_info || {};
+                    const card = item.card_info || {};
+                    
+                    const contact = detailed.contact_info || {};
+                    
+                    return {
+                        id: item.id || item.card_number || Math.random(),
+                        name: detailed.full_name || card.name || card.title || 'Не указано',
+                        position: detailed.position || card.title || 'Не указано',
+                        salary: detailed.salary || card.salary || 'Не указана',
+                        location: contact.location || detailed.location || card.age_location || 'Не указан',
+                        age: contact.age || detailed.age || 'Не указан',
+                        birth_date: detailed.birth_date || 'Не указана',
+                        address: contact.address || detailed.address || 'Не указан',
+                        phone: contact.phone || detailed.phone || 'Не указан',
+                        skills: detailed.professional_skills || [],
+                        professional_skills: detailed.professional_skills || [],
+                        personal_skills: detailed.personal_skills || [],
+                        languages: detailed.languages || [],
+                        experience: detailed.experience || [],
+                        education: detailed.education || [],
+                        additional_info: detailed.additional_info || '',
+                        detailed_description: detailed.detailed_description || '',
+                        url: card.link || detailed.resume_url || item.resume_url || '#',
+                        created_at: item.created_at || '',
+                        updated_at: item.updated_at || '',
+                        parsed_with: detailed.parsed_with || 'Автоматически'
+                    };
+                });
+                
+                filteredData = [...resumesData];
+                
+                console.log('Загружено резюме:', resumesData.length);
+                console.log('Пример данных:', resumesData[0]);
+                
+                updateStats();
+                renderTable();
+                
+            } catch (error) {
+                console.error('Ошибка загрузки данных:', error);
+                document.getElementById('resume-tbody').innerHTML = `
+                    <tr><td colspan="9" style="text-align: center; padding: 40px; color: #dc3545;">
+                        ❌ Ошибка загрузки данных. Убедитесь что файл база_резюме_полная.json доступен.
+                    </td></tr>
+                `;
+            }
+        }
+
+        // Обновление статистики
+        function updateStats() {
+            const totalResumes = resumesData.length;
+            const qualityResumes = resumesData.filter(r => r.name !== 'Не указано' && r.skills.length > 0).length;
+            
+            // Подсчет средней зарплаты
+            const salariesWithNumbers = resumesData
+                .map(r => r.salary)
+                .filter(s => s && s.includes('грн'))
+                .map(s => parseInt(s.replace(/[^\d]/g, '')))
+                .filter(n => n > 0);
+            
+            const avgSalary = salariesWithNumbers.length > 0 
+                ? Math.round(salariesWithNumbers.reduce((a, b) => a + b) / salariesWithNumbers.length)
+                : 0;
+            
+            const uniqueCities = new Set(resumesData.map(r => r.location).filter(l => l !== 'Не указан')).size;
+            
+            document.getElementById('total-resumes').textContent = totalResumes;
+            document.getElementById('quality-resumes').textContent = qualityResumes;
+            document.getElementById('avg-salary').textContent = avgSalary > 0 ? `${avgSalary.toLocaleString()}₴` : 'N/A';
+            document.getElementById('cities-count').textContent = uniqueCities;
+        }
+
+        // Отрисовка таблицы
+        function renderTable() {
+            try {
+                const tbody = document.getElementById('resume-tbody');
+                const noResults = document.getElementById('no-results');
+            
+            if (filteredData.length === 0) {
+                tbody.innerHTML = '';
+                noResults.style.display = 'block';
+                return;
+            }
+            
+            noResults.style.display = 'none';
+            
+            tbody.innerHTML = filteredData.map((resume, index) => `
+                <tr>
+                    <td style="text-align: center; font-weight: 600; color: #6c757d;">${index + 1}</td>
+                    <td class="name-cell">${resume.name}</td>
+                    <td class="position-cell">${resume.position}</td>
+                    <td class="salary-cell">${resume.salary}</td>
+                    <td class="location-cell">${resume.location}</td>
+                    <td class="location-cell">${resume.age}</td>
+                    <td class="skills-cell">
+                        ${Array.isArray(resume.skills) && resume.skills.length > 0 ? 
+                            resume.skills.slice(0, 3).map(skill => 
+                                `<span class="skill-tag">${skill}</span>`
+                            ).join('') + 
+                            (resume.skills.length > 3 ? `<span class="skill-tag">+${resume.skills.length - 3}</span>` : '')
+                            : '<span style="color: #999;">Не указаны</span>'
+                        }
+                    </td>
+                    <td class="experience-cell">
+                        ${Array.isArray(resume.experience) && resume.experience.length > 0 ? 
+                            resume.experience.slice(0, 2).map(exp => {
+                                const expText = typeof exp === 'string' ? exp : (exp.position || exp.company || 'Опыт работы');
+                                return `<div style="margin-bottom: 2px;">${expText.substring(0, 40)}${expText.length > 40 ? '...' : ''}</div>`;
+                            }).join('') + 
+                            (resume.experience.length > 2 ? `<div style="color: #999;">+${resume.experience.length - 2} еще</div>` : '')
+                            : '<span style="color: #999;">Не указан</span>'
+                        }
+                    </td>
+                    <td style="text-align: center;">
+                        <button class="details-btn" onclick="showDetails(${index})">Подробнее</button>
+                    </td>
+                    <td class="url-cell">
+                        <a href="${resume.url}" target="_blank" class="url-link">Открыть</a>
+                    </td>
+                </tr>
+            `).join('');
+            } catch (error) {
+                console.error('Ошибка отрисовки таблицы:', error);
+                const tbody = document.getElementById('resume-tbody');
+                tbody.innerHTML = `
+                    <tr><td colspan="10" style="text-align: center; padding: 40px; color: #dc3545;">
+                        ❌ Ошибка отображения данных: ${error.message}
+                    </td></tr>
+                `;
+            }
+        }
+
+        // Поиск
+        function filterData() {
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            const activeFilter = document.querySelector('.filter-btn.active').dataset.filter;
+            
+            filteredData = resumesData.filter(resume => {
+                // Текстовый поиск
+                const matchesSearch = searchTerm === '' || 
+                    resume.name.toLowerCase().includes(searchTerm) ||
+                    resume.position.toLowerCase().includes(searchTerm) ||
+                    resume.skills.some(skill => skill.toLowerCase().includes(searchTerm)) ||
+                    resume.location.toLowerCase().includes(searchTerm);
+                
+                // Фильтры
+                let matchesFilter = true;
+                switch(activeFilter) {
+                    case 'kiev':
+                        matchesFilter = resume.location.toLowerCase().includes('київ');
+                        break;
+                    case 'with-salary':
+                        matchesFilter = resume.salary.includes('грн');
+                        break;
+                    case '1c':
+                        matchesFilter = resume.skills.some(skill => skill.toLowerCase().includes('1с'));
+                        break;
+                    case 'experience':
+                        matchesFilter = resume.experience.length >= 2;
+                        break;
+                }
+                
+                return matchesSearch && matchesFilter;
+            });
+            
+            renderTable();
+        }
+
+        // События
+        document.getElementById('search-input').addEventListener('input', filterData);
+
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                filterData();
+            });
+        });
+
+        // Показать детальную информацию о кандидате
+        function showDetails(index) {
+            const resume = filteredData[index];
+            const modal = document.getElementById('detailModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalTitle.innerHTML = `👤 ${resume.name} - ${resume.position}`;
+            
+            modalBody.innerHTML = `
+                <div class="detail-section">
+                    <h3>📋 Основная информация</h3>
+                    <p><strong>👤 Полное имя:</strong> ${resume.name}</p>
+                    <p><strong>💼 Должность:</strong> ${resume.position}</p>
+                    <p><strong>💰 Зарплата:</strong> ${resume.salary}</p>
+                    <p><strong>📍 Город:</strong> ${resume.location}</p>
+                    <p><strong>🎂 Возраст:</strong> ${resume.age} лет</p>
+                    <p><strong>📅 Дата рождения:</strong> ${resume.birth_date}</p>
+                    <p><strong>🏠 Адрес:</strong> ${resume.address}</p>
+                    <p><strong>📞 Телефон:</strong> ${resume.phone}</p>
+                    <p><strong>🔗 Ссылка:</strong> <a href="${resume.url}" target="_blank">${resume.url}</a></p>
+                </div>
+
+                ${resume.detailed_description ? `
+                <div class="detail-section">
+                    <h3>📝 Общее описание</h3>
+                    <p style="line-height: 1.6;">${resume.detailed_description}</p>
+                </div>
+                ` : ''}
+
+                <div class="detail-section">
+                    <h3>🔧 Профессиональные навыки</h3>
+                    ${resume.professional_skills && resume.professional_skills.length > 0 ? `
+                        <div style="margin-bottom: 15px;">
+                            ${resume.professional_skills.map(skill => `
+                                <div style="background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 8px; border-left: 3px solid #667eea;">
+                                    ${skill}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    
+                    ${resume.skills && resume.skills.length > 0 ? `
+                        <div>
+                            <strong>Основные навыки:</strong><br>
+                            ${resume.skills.map(skill => `<span class="skill-badge">${skill}</span>`).join('')}
+                        </div>
+                    ` : '<p>Профессиональные навыки не указаны</p>'}
+                </div>
+
+                <div class="detail-section">
+                    <h3>📋 Детальный опыт работы</h3>
+                    ${resume.experience.length > 0 ? `
+                        ${resume.experience.map(exp => `
+                            <div style="background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #28a745;">
+                                <div style="white-space: pre-line; line-height: 1.6;">${exp}</div>
+                            </div>
+                        `).join('')}
+                    ` : '<p>Опыт работы не указан</p>'}
+                </div>
+
+                <div class="detail-section">
+                    <h3>🎓 Полное образование</h3>
+                    ${resume.education && resume.education.length > 0 ? `
+                        ${resume.education.map(edu => `
+                            <div style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-radius: 8px; border-left: 4px solid #17a2b8;">
+                                <div style="line-height: 1.6;">${edu}</div>
+                            </div>
+                        `).join('')}
+                    ` : '<p>Информация об образовании не указана</p>'}
+                </div>
+
+                <div class="detail-section">
+                    <h3>💪 Личные качества</h3>
+                    ${resume.personal_skills && resume.personal_skills.length > 0 ? `
+                        <div>
+                            ${resume.personal_skills.map(skill => `<span class="skill-badge" style="background: #28a745;">${skill}</span>`).join('')}
+                        </div>
+                    ` : '<p>Личные качества не указаны</p>'}
+                </div>
+
+                <div class="detail-section">
+                    <h3>🌍 Знание языков</h3>
+                    ${resume.languages && resume.languages.length > 0 ? `
+                        <ul class="detail-list">
+                            ${resume.languages.map(lang => `<li>🗣️ ${lang}</li>`).join('')}
+                        </ul>
+                    ` : '<p>Информация о языках не указана</p>'}
+                </div>
+
+                <div class="detail-section">
+                    <h3>ℹ️ Дополнительная информация</h3>
+                    <div style="line-height: 1.6; white-space: pre-line;">
+                        ${resume.additional_info || 'Дополнительная информация не указана'}
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <h3>📅 Информация о записи</h3>
+                    <p><strong>📥 Добавлено:</strong> ${resume.created_at || 'Не указано'}</p>
+                    <p><strong>🔄 Обновлено:</strong> ${resume.updated_at || 'Не указано'}</p>
+                    <p><strong>🤖 Обработано:</strong> ${resume.parsed_with || 'Автоматически'}</p>
+                </div>
+            `;
+            
+            modal.style.display = 'block';
+        }
+        
+        // Закрытие модального окна
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+        
+        // Обработчики событий для модального окна
+        document.addEventListener('DOMContentLoaded', function() {
+            const modal = document.getElementById('detailModal');
+            const closeBtn = document.querySelector('.close');
+            
+            // Закрытие по клику на X
+            closeBtn.onclick = closeModal;
+            
+            // Закрытие по клику вне модального окна
+            window.onclick = function(event) {
+                if (event.target === modal) {
+                    closeModal();
+                }
+            };
+            
+            // Закрытие по нажатию Escape
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape' && modal.style.display === 'block') {
+                    closeModal();
+                }
+            });
+        });
+
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', initializeDatabase);
+    </script>
+</body>
+</html> 

@@ -195,6 +195,19 @@ class WorkUaParser:
                     print(f"   Всего div внутри контейнера: {len(divs_in_container)}")
                 else:
                     print("   ⚠️ Контейнер #pjax-resume-list НЕ НАЙДЕН")
+                
+                # АВТОМАТИЧЕСКАЯ АДАПТАЦИЯ СЕЛЕКТОРОВ с LLM
+                if len(cards) <= 2 and hasattr(self, '_initial_cards_count') and self._initial_cards_count > 5:
+                    print("🤖 АКТИВИРУЕМ АВТОАДАПТАЦИЮ СЕЛЕКТОРОВ...")
+                    new_cards = self._auto_adapt_selectors_with_llm()
+                    if new_cards and len(new_cards) > len(cards):
+                        print(f"✅ LLM нашел лучшие селекторы! Карточек: {len(new_cards)}")
+                        return new_cards
+            
+            # Запоминаем количество карточек при первом запуске
+            if not hasattr(self, '_initial_cards_count') and len(cards) > 5:
+                self._initial_cards_count = len(cards)
+                print(f"📝 Запомнили начальное количество карточек: {len(cards)}")
             
             if len(cards) > 0:
                 print("📋 Первые несколько карточек:")
@@ -302,6 +315,155 @@ class WorkUaParser:
         except Exception as e:
             print(f"❌ Ошибка при извлечении информации из карточки: {e}")
             return None
+
+    def _auto_adapt_selectors_with_llm(self):
+        """🤖 АВТОМАТИЧЕСКАЯ АДАПТАЦИЯ СЕЛЕКТОРОВ с помощью LLM"""
+        print("🔍 Анализируем DOM структуру с помощью LLM...")
+        
+        try:
+            # Получаем текущий HTML страницы (урезанный для LLM)
+            page_source = self.driver.page_source
+            
+            # Берем только нужную часть HTML для экономии токенов
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(page_source, 'html.parser')
+            
+            # Ищем потенциальные контейнеры с резюме
+            potential_containers = []
+            
+            # 1. Ищем элементы с "resume" в id/class
+            for elem in soup.find_all(attrs={'class': True}):
+                classes = ' '.join(elem.get('class', []))
+                if 'resume' in classes.lower() or 'card' in classes.lower():
+                    potential_containers.append({
+                        'tag': elem.name,
+                        'classes': classes,
+                        'id': elem.get('id', ''),
+                        'text_sample': elem.get_text()[:100] if elem.get_text() else ''
+                    })
+            
+            # 2. Берем только первые 10 самых релевантных
+            potential_containers = potential_containers[:10]
+            
+            # 3. Формируем HTML снимок для LLM
+            html_analysis = "АНАЛИЗ DOM СТРУКТУРЫ:\n"
+            html_analysis += f"Всего найдено потенциальных элементов: {len(potential_containers)}\n\n"
+            
+            for i, container in enumerate(potential_containers[:5]):
+                html_analysis += f"{i+1}. Тег: <{container['tag']}>\n"
+                html_analysis += f"   Классы: {container['classes']}\n"
+                html_analysis += f"   ID: {container['id']}\n"
+                html_analysis += f"   Текст: {container['text_sample'][:50]}...\n\n"
+            
+            # 4. Запрос к LLM для анализа селекторов
+            analysis_prompt = f"""Анализируй HTML структуру сайта work.ua с резюме бухгалтеров.
+
+ЗАДАЧА: Найти правильные CSS селекторы для карточек резюме.
+
+ТЕКУЩАЯ ПРОБЛЕМА: 
+- Старый селектор ".card.resume-link" находит только 1 карточку вместо 14
+- Контейнер "#pjax-resume-list" пропал после PJAX навигации
+
+{html_analysis}
+
+ВЕРНИ JSON с новыми селекторами:
+{{
+    "container_selector": "новый селектор контейнера",
+    "card_selector": "новый селектор карточек",
+    "confidence": "высокая/средняя/низкая",
+    "reasoning": "объяснение выбора селекторов"
+}}
+
+Селекторы должны быть УНИВЕРСАЛЬНЫМИ и работать после PJAX загрузки."""
+
+            # 5. Вызов LLM
+            response = self.call_llm_for_analysis(analysis_prompt)
+            
+            if response and 'card_selector' in response:
+                new_selector = response['card_selector']
+                print(f"🤖 LLM предложил селектор: {new_selector}")
+                print(f"📊 Уверенность: {response.get('confidence', 'неизвестна')}")
+                print(f"💭 Объяснение: {response.get('reasoning', 'не указано')}")
+                
+                # 6. Тестируем новый селектор
+                test_cards = self.driver.find_elements(By.CSS_SELECTOR, new_selector)
+                print(f"🧪 Тест нового селектора: найдено {len(test_cards)} карточек")
+                
+                if len(test_cards) > 2:
+                    # Обновляем селектор в конфиге для будущих запусков
+                    self._update_selector_config(new_selector)
+                    return test_cards
+                    
+            print("❌ LLM не смог найти лучшие селекторы")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Ошибка автоадаптации: {e}")
+            return None
+    
+    def call_llm_for_analysis(self, prompt):
+        """Вызов LLM для анализа DOM структуры"""
+        try:
+            from openai import OpenAI
+            import json
+            
+            client = OpenAI()
+            
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Ты эксперт по веб-скрейпингу и CSS селекторам. Анализируй HTML и возвращай только JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Парсим JSON ответ
+            if content.startswith('```json'):
+                content = content.replace('```json', '').replace('```', '').strip()
+            
+            return json.loads(content)
+            
+        except Exception as e:
+            print(f"❌ Ошибка LLM анализа: {e}")
+            return None
+    
+    def _update_selector_config(self, new_selector):
+        """Обновление селектора в конфигурации"""
+        try:
+            # Читаем конфиг
+            with open('config.py', 'r', encoding='utf-8') as f:
+                config_content = f.read()
+            
+            # Заменяем селектор
+            import re
+            pattern = r"'resume_cards':\s*'[^']+'"
+            replacement = f"'resume_cards': '{new_selector}'"
+            
+            updated_config = re.sub(pattern, replacement, config_content)
+            
+            # Сохраняем
+            with open('config.py', 'w', encoding='utf-8') as f:
+                f.write(updated_config)
+                
+            print(f"💾 Селектор обновлен в config.py: {new_selector}")
+            
+            # Также создаем backup файл
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"selector_backup_{timestamp}.txt"
+            with open(backup_filename, 'w', encoding='utf-8') as f:
+                f.write(f"Дата: {datetime.datetime.now()}\n")
+                f.write(f"Новый селектор: {new_selector}\n")
+                f.write(f"Причина: Автоадаптация LLM\n")
+            
+            print(f"💾 Создан backup: {backup_filename}")
+            
+        except Exception as e:
+            print(f"❌ Ошибка обновления конфига: {e}")
         
     def click_card(self, card):
         """Переход внутрь карточки"""
@@ -387,6 +549,36 @@ class WorkUaParser:
                 
                 if current_url_after != current_url_before:
                     self.logger.info("✅ Успешно вернулись назад")
+                    
+                    # КРИТИЧЕСКИ ВАЖНО: Ждем загрузки PJAX контейнера и карточек
+                    self.logger.info("⏳ Ожидаем загрузки PJAX контейнера...")
+                    pjax_wait = WebDriverWait(self.driver, 15)
+                    
+                    try:
+                        # Ждем появления PJAX контейнера
+                        pjax_wait.until(EC.presence_of_element_located((By.ID, "pjax-resume-list")))
+                        self.logger.info("✅ PJAX контейнер загружен")
+                        
+                        # Дополнительно ждем появления карточек внутри контейнера
+                        pjax_wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#pjax-resume-list .card.resume-link")))
+                        self.logger.info("✅ Карточки резюме загружены")
+                        
+                        # Дополнительная пауза для полной стабилизации
+                        time.sleep(1)
+                        
+                    except TimeoutException:
+                        self.logger.warning("⚠️ PJAX контейнер или карточки не загрузились за 15 секунд")
+                        # Пробуем принудительно вернуться на основную страницу
+                        self.logger.info("🔄 Принудительный переход на основную страницу...")
+                        try:
+                            self.driver.get(self.base_url)
+                            time.sleep(3)
+                            # Проверяем что карточки появились
+                            wait_cards = WebDriverWait(self.driver, 10)
+                            wait_cards.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".card.resume-link")))
+                            self.logger.info("✅ Страница восстановлена")
+                        except Exception as e:
+                            self.logger.error(f"❌ Не удалось восстановить страницу: {e}")
                     
                     # Восстанавливаем обычный timeout
                     self.driver.set_page_load_timeout(BROWSER_CONFIG['page_load_timeout'])
@@ -699,26 +891,47 @@ class WorkUaParser:
             
             # Формируем prompt для ChatGPT
             prompt = f"""
-Проанализируй страницу резюме с сайта work.ua и извлеки информацию в формате JSON.
+Извлеки ПОЛНУЮ детальную информацию из резюме в JSON формате:
 
-Текст страницы:
 {main_content}
 
-Верни JSON с такими полями:
+Формат ответа:
 {{
-    "full_name": "полное имя кандидата",
-    "position": "желаемая должность", 
-    "salary": "зарплатные ожидания",
+    "full_name": "полное имя",
+    "position": "должность", 
+    "salary": "зарплата",
     "age": "возраст",
-    "location": "город/локация",
-    "education": ["образование", "учебные заведения"],
-    "experience": ["опыт работы", "предыдущие места работы"],
-    "skills": ["навыки", "ключевые компетенции"],
-    "additional_info": "дополнительная информация"
+    "location": "город",
+    "birth_date": "дата рождения",
+    "address": "полный адрес",
+    "phone": "телефон (если есть)",
+    "education": [
+        "ПОЛНАЯ информация об образовании с годами, учебными заведениями, квалификациями"
+    ],
+    "experience": [
+        "ДЕТАЛЬНАЯ информация о каждом месте работы с должностными обязанностями, компанией, периодом"
+    ],
+    "professional_skills": [
+        "ПОДРОБНЫЕ профессиональные навыки, знание программ, технологий"
+    ],
+    "personal_skills": [
+        "Личные качества, характеристики"
+    ],
+    "languages": [
+        "Знание языков с уровнем"
+    ],
+    "additional_info": "ВСЯ дополнительная информация",
+    "detailed_description": "Полное описание кандидата"
 }}
 
-Если какая-то информация не найдена, укажи "Не указано".
-Ответь ТОЛЬКО JSON, без дополнительного текста.
+КРИТИЧЕСКИ ВАЖНО: 
+- Извлекай ВСЮ доступную информацию БЕЗ сокращений
+- В education - ПОЛНЫЕ названия учебных заведений с годами и специальностями
+- В experience - ДЕТАЛЬНЫЕ должностные обязанности для каждого места работы
+- В professional_skills - ВСЕ упомянутые программы, технологии, навыки
+- Сохраняй ВЕСЬ оригинальный текст важных разделов
+- Если информация большая - включай её полностью
+- Ответь ТОЛЬКО JSON
 """
 
             # Отправляем запрос в OpenAI
@@ -729,10 +942,10 @@ class WorkUaParser:
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": "Ты эксперт по анализу резюме. Извлекаешь структурированную информацию из текста резюме."},
+                        {"role": "system", "content": "Ты эксперт по анализу резюме. Извлекаешь ПОЛНУЮ структурированную информацию из текста резюме БЕЗ сокращений."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=1000,
+                    max_tokens=4000,  # Увеличиваем лимит токенов для детальной информации
                     temperature=0.1
                 )
                 
@@ -758,9 +971,26 @@ class WorkUaParser:
                     self.logger.info("🎉 Информация успешно извлечена с помощью LLM")
                     return resume_data
                     
-                except json.JSONDecodeError:
-                    self.logger.error("❌ Ошибка парсинга JSON от OpenAI")
-                    self.logger.error(f"Ответ: {llm_response}")
+                except json.JSONDecodeError as e:
+                    self.logger.warning("⚠️ Неполный JSON от OpenAI, пытаемся восстановить...")
+                    self.logger.warning(f"Ошибка: {e}")
+                    
+                    # Пытаемся восстановить неполный JSON
+                    try:
+                        # Добавляем недостающие закрывающие скобки
+                        fixed_json = self._fix_incomplete_json(llm_response)
+                        if fixed_json:
+                            resume_data = json.loads(fixed_json)
+                            resume_data['resume_url'] = current_url
+                            resume_data['parsed_with'] = 'OpenAI GPT-3.5 (fixed)'
+                            
+                            self.logger.info("🛠️ JSON восстановлен и обработан")
+                            return resume_data
+                    except:
+                        pass
+                    
+                    self.logger.error("❌ Не удалось восстановить JSON от OpenAI")
+                    self.logger.error(f"Неполный ответ: {llm_response[:500]}...")
                     return None
                     
             except Exception as e:
@@ -769,6 +999,41 @@ class WorkUaParser:
                 
         except Exception as e:
             self.logger.error(f"❌ Ошибка в parse_resume_with_llm: {e}")
+            return None
+    
+    def _fix_incomplete_json(self, broken_json: str) -> str:
+        """Пытается восстановить неполный JSON"""
+        try:
+            # Удаляем лишние символы в конце
+            broken_json = broken_json.strip()
+            
+            # Считаем открытые/закрытые скобки
+            open_braces = broken_json.count('{')
+            close_braces = broken_json.count('}')
+            open_brackets = broken_json.count('[')
+            close_brackets = broken_json.count(']')
+            
+            # Если JSON обрывается на значении строки, завершаем её
+            if broken_json.endswith('"') and not broken_json.endswith('",') and not broken_json.endswith('"]'):
+                pass  # JSON уже корректно завершен
+            elif not broken_json.endswith('"') and not broken_json.endswith(',') and not broken_json.endswith('}') and not broken_json.endswith(']'):
+                # Если обрывается посередине значения, добавляем кавычку
+                if '"' in broken_json.split('\n')[-1]:
+                    broken_json += '"'
+            
+            # Добавляем недостающие закрывающие скобки
+            for _ in range(open_brackets - close_brackets):
+                broken_json += ']'
+            
+            for _ in range(open_braces - close_braces):
+                broken_json += '}'
+            
+            # Проверяем что получился валидный JSON
+            json.loads(broken_json)
+            return broken_json
+            
+        except Exception as e:
+            self.logger.debug(f"Не удалось восстановить JSON: {e}")
             return None
 
     def process_all_cards(self):
@@ -841,8 +1106,12 @@ class WorkUaParser:
                             
                             print(f"✅ Резюме {i+1} успешно обработано")
                             print(f"   Полное имя: {details['full_name']}")
-                            print(f"   Навыки: {', '.join(details['skills'][:1])}")
-                            print(f"   Опыт: {len(details['detailed_experience'])} записей")
+                            # Безопасный доступ к навыкам
+                            prof_skills = details.get('professional_skills', [])
+                            if prof_skills and len(prof_skills) > 0:
+                                print(f"   Навыки: {prof_skills[0]}")
+                            else:
+                                print(f"   Навыки: Не указаны")
                         else:
                             print(f"⚠️ Не удалось извлечь детали резюме {i+1}")
                             # Сохраняем хотя бы краткую информацию
@@ -938,14 +1207,14 @@ if __name__ == "__main__":
             if cards:
                 print(f"🎯 Найдено {len(cards)} карточек")
                 
-                print(f"\n🧪 ТЕСТИРУЕМ МАССОВУЮ ОБРАБОТКУ (первые 3 карточки):")
-                print("📝 Для демо ограничиваем до 3 карточек, чтобы не перегружать тест")
+                print(f"\n🚀 ЗАПУСКАЕМ ПОЛНУЮ ОБРАБОТКУ ВСЕХ КАРТОЧЕК:")
+                print(f"📝 Обрабатываем все {len(cards)} найденных резюме")
                 
                 # Используем исправленную логику из process_all_cards
                 processed_resumes = []
                 successful_count = 0
                 failed_count = 0
-                total_cards = min(3, len(cards))  # Ограничиваем до 3
+                total_cards = len(cards)  # Обрабатываем все карточки
                 
                 # Обрабатываем по индексу, а не по элементу
                 for i in range(total_cards):
@@ -991,7 +1260,12 @@ if __name__ == "__main__":
                                 
                                 print(f"✅ Резюме {i+1} обработано!")
                                 print(f"   Детали: {details['full_name']}")
-                                print(f"   Навыки: {details['skills'][0] if details['skills'] else 'Нет'}")
+                                # Безопасный доступ к навыкам
+                                prof_skills = details.get('professional_skills', [])
+                                if prof_skills and len(prof_skills) > 0:
+                                    print(f"   Навыки: {prof_skills[0]}")
+                                else:
+                                    print(f"   Навыки: Нет")
                             else:
                                 failed_count += 1
                             
@@ -1014,9 +1288,9 @@ if __name__ == "__main__":
                         print(f"❌ Ошибка: {e}")
                         failed_count += 1
                 
-                # Итоги демо-теста
+                # Итоги полной обработки
                 print(f"\n{'='*50}")
-                print(f"📊 ИТОГИ ДЕМО-ТЕСТА")
+                print(f"📊 ИТОГИ ПОЛНОЙ ОБРАБОТКИ")
                 print(f"{'='*50}")
                 print(f"✅ Успешно: {successful_count}")
                 print(f"❌ Ошибок: {failed_count}")
@@ -1024,6 +1298,13 @@ if __name__ == "__main__":
                 print(f"📈 Успешность: {(successful_count/total_cards)*100:.1f}%")
                 print(f"📚 Обработано резюме: {len(processed_resumes)}")
                 print(f"{'='*50}")
+                
+                # Сохраняем результаты в JSON файл
+                if processed_resumes:
+                    output_filename = f"work_ua_resumes_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    with open(output_filename, 'w', encoding='utf-8') as f:
+                        json.dump(processed_resumes, f, ensure_ascii=False, indent=2)
+                    print(f"💾 Результаты сохранены в файл: {output_filename}")
                 
             else:
                 print("❌ Карточки не найдены")
